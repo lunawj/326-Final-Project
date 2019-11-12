@@ -76,6 +76,8 @@ extern volatile uint8_t REFLAG;     //RE Button Flag
 //Step size for size four font
 #define STEP 10
 
+//Watchdog counter
+#define WDResetCount 120
 
 
 #define CALIBRATION_START 0x000200000
@@ -83,6 +85,10 @@ extern volatile uint8_t REFLAG;     //RE Button Flag
 
 /*Macro for '10' on keypad*/
 #define ASTERISK 10
+
+//WD Function Prototype
+void WDInit();
+void resetWDCount();
 
 //RTC and Flash function prototypes
 void printTime(void);
@@ -143,7 +149,7 @@ typedef struct
 int bgColor;                        //Background color of LCD Screen
 int hlColor;                        //highlighted color of LCD Screen
 int txtColor;                       //text color of LCD Screen
-
+uint8_t WDCount;
 //TIME struct related global variables
 TIME time;
 TIME alarm[5];
@@ -154,6 +160,7 @@ uint8_t* addr_pointer; // pointer to address in flash for reading back values
 
 int main(void)
 {
+    WDCount = 0;
     uint16_t BLACK = ST7735_Color565(0,0,0);
     /* Stop Watchdog  */
     MAP_WDT_A_holdTimer();
@@ -168,6 +175,7 @@ int main(void)
     get_CLK_DT_values();
     // Enable Interrupts
     NVIC_EnableIRQ(PORT2_IRQn);
+    NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
     __enable_interrupt();
 
 
@@ -185,6 +193,12 @@ int main(void)
     hlColor = ST7735_WHITE;
     txtColor = ST7735_BLACK;
     read_from_flash();
+
+    WDInit();
+    // Enable Interrupts
+    NVIC_EnableIRQ(PORT2_IRQn);
+    NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
+    __enable_interrupt();
 
     //Cycle through the parts
     displayScreen();
@@ -268,6 +282,7 @@ void displayScreen()
 
     while(1)
     {
+        resetWDCount();
         if(REFLAG)
         {
             REFLAG = 0;
@@ -429,6 +444,7 @@ void settingsMenu()
     //Loops while the RE Button isn't pressed. Once it is, then the highlighted menu option will be selected
     while(REFLAG == 0)
     {
+        resetWDCount();
         if(resetFlag)
         {
 //            Output_Clear();             //Clears the LCD screen
@@ -670,6 +686,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     //and update the digit one of the hour
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(0 + 30, HEIGHT*(1.0/2), hour1 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
 
@@ -705,6 +722,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     //and update the digit two of the hour
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(STEP + 30, HEIGHT*(1.0/2), hour2 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
         if(cw > cw_prev)            //clockwise
@@ -735,6 +753,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     //and update the digit one of the minute
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(3*STEP + 30, HEIGHT*(1.0/2), minute1 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
 
@@ -766,6 +785,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     //and update the digit two of the minute
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(4*STEP + 30, HEIGHT*(1.0/2), minute2 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
 
@@ -797,6 +817,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     //and update the AM or PM option
     while(REFLAG == 0)
     {
+        resetWDCount();
         for(i = 0; i < 3; i++)
         {
             ST7735_DrawChar(i*STEP + 80, HEIGHT*(1.0/2), timeOfDay[AM][i], hlColor, bgColor, 2);
@@ -899,6 +920,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     //and update the digit one of the month
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(0 + 20, HEIGHT*(2.0/4), month1 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
 
@@ -934,6 +956,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     //and update the digit two of the month
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(STEP + 20, HEIGHT*(2.0/4), month2 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
         if(cw > cw_prev)            //clockwise
@@ -964,6 +987,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     //and update the digit one of the day
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(3*STEP + 20, HEIGHT*(2.0/4), day1 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
 
@@ -995,6 +1019,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     //and update the digit two of the day
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(4*STEP + 20, HEIGHT*(2.0/4), day2 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
 
@@ -1026,6 +1051,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     //and update the digit one of the year
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(6*STEP + 20, HEIGHT*(2.0/4), year1 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
 
@@ -1058,6 +1084,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     //and update the digit two of the year
     while(REFLAG == 0)
     {
+        resetWDCount();
         ST7735_DrawChar(7*STEP + 20, HEIGHT*(2.0/4), year2 + '0', hlColor, bgColor, 2);
         Delay1ms(500);
         if(cw > cw_prev)            //clockwise
@@ -1088,6 +1115,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     //and update the digit one of the hour
     while(REFLAG == 0)
     {
+        resetWDCount();
         for(i = 0; week[weekday][i] != '\0'; i++)
         {
             ST7735_DrawChar(i*STEP + 30, HEIGHT*(3.0/4), week[weekday][i], hlColor, bgColor, 2);
@@ -1177,6 +1205,7 @@ void playlist()
     //Once it is, then the highlighted menu option will be selected
     while(REFLAG == 0)
     {
+        resetWDCount();
         if(resetFlag)
         {
 //            Output_Clear();             //Clears the LCD screen
@@ -1401,6 +1430,7 @@ void viewAlarms()
     //Once it is, then the highlighted menu option will be selected
     while(REFLAG == 0)
     {
+        resetWDCount();
         if(resetFlag)
         {
 //            Output_Clear();             //Clears the LCD screen
@@ -1984,4 +2014,183 @@ void read_from_flash()
         alarm[i].AM = read_back_data[(16 * i) + 7];
         alarm[i].H24 = read_back_data[(16 * i) + 8];
     }
+}
+
+
+//
+//#define BTTN_PORT P5
+//#define BUTTON BIT0
+//
+//#define TRUE 1
+//#define FALSE 0
+//
+//
+//#define WDResetCount 3
+
+//uint8_t button_pressed(void);
+//void PORT5_IRQHandler(void);
+//void enable_ButtonInterrupt(void);
+//void button_initialization(void);
+//void init48MHz(void);
+//void WDInit();
+//
+//uint8_t pressed = FALSE;
+//uint8_t WDCount;
+
+///**
+// * main.c
+// */
+//void main(void)
+//{
+//    uint16_t BLACK = ST7735_Color565(0,0, 0); // Used for LCD background color
+//    WDCount = 0;
+//    uint8_t WDCount_Prev = 5;
+//
+//    WDT_A->CTL = WDT_A_CTL_PW | WDT_A_CTL_HOLD;     // stop watchdog timer
+//
+//    button_initialization();
+//    enable_ButtonInterrupt();
+//    initSysTick();
+//    init48MHz();
+//
+//
+//    Output_On();                        // Turns on LCD display
+//    ST7735_InitR(INITR_BLACKTAB);       // Initialize LCD
+//    //Output_Clear();                     // Clears output
+//    ST7735_FillScreen(BLACK);           // Fills background color
+//    WDInit();
+//    NVIC_EnableIRQ(PORT5_IRQn);
+//    NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
+//    __enable_interrupt(); // Enables the use of interrupts
+//
+//    P2->SEL0 &=~ BIT0;
+//    P2->SEL1 &=~ BIT0;
+//    P2->DIR |= BIT0;
+//    P2->OUT |= BIT0;
+//    __delay_cycles(3000000);
+//    P2->OUT &=~ BIT0;
+//
+//    while(1)
+//    {
+//        if(WDCount != WDCount_Prev)
+//        {
+//            WDCount_Prev = WDCount;
+//            ST7735_SetCursor(1, 4);
+//            switch(WDCount)
+//            {
+//            case 0:
+//                printf("Time (sec): 0\n", WDCount);
+//                break;
+//            case 1:
+//                printf("Time (sec): 1\n", WDCount);
+//                break;
+//            case 2:
+//                printf("Time (sec): 2\n", WDCount);
+//                break;
+//            case 3:
+//                printf("Time (sec): 3\n", WDCount);
+//                break;
+//            case 4:
+//                printf("Time (sec): 4\n", WDCount);
+//                break;
+//            default:
+//                break;
+//            }
+//
+//        }
+//        //      ST7735_SetCursor(1, 4);
+//        //      printf("Time (sec): %d\n", WDCount);
+//        //
+//        //      if(pressed)
+//        //      {
+//        //          pressed = FALSE;
+//        //          printf("Button interrupts works\n");
+//        //      }
+//    }
+//
+//
+//}
+
+
+
+
+//void button_initialization(void)
+//{
+//    // Sets Port 5 as a GPIO
+//    BTTN_PORT->SEL0 &= ~BUTTON;
+//    BTTN_PORT->SEL1 &= ~BUTTON;
+//
+//    // Sets BUTTON as inputs
+//    BTTN_PORT->DIR &= ~BUTTON;
+//
+//    // Enable resistor
+//    BTTN_PORT->REN |= BUTTON;
+//    // Set resistor as a pull-up
+//    BTTN_PORT->OUT |= BUTTON;
+//}
+
+//void enable_ButtonInterrupt(void)
+//{
+//    BTTN_PORT->IES |= BUTTON;
+//    BTTN_PORT->IE  |= BUTTON;
+//    BTTN_PORT->IFG = 0; // Clears falgs
+//}
+
+//void PORT5_IRQHandler(void)
+//{
+//    if(BTTN_PORT->IFG & BUTTON)
+//        if(button_pressed())
+//        {
+//            WDCount = 0;
+//            WDT_A->CTL=0x5A00 // WatchdogPassword
+//                    |1<<5 //Set to ACLK
+//                    |1<<4 //Set to interval mode
+//                    |1<<3 // Clear Timer
+//                    |4; //Set to 2^15 interval (1 seconds)
+//        }
+//
+//    BTTN_PORT->IFG = 0; // Clears flags
+//}
+
+//uint8_t button_pressed(void)
+//{
+//    // Checks for button press
+//    if(!(BTTN_PORT->IN & BUTTON))
+//    {
+//        Delay1ms(40); // Waits 40ms before checking button for press
+//
+//        // Checks to see if the button is still pressed
+//        if(!(BTTN_PORT->IN & BUTTON))
+//            return TRUE;
+//    }
+//    return FALSE;
+//}
+
+void WDInit()
+{
+    WDT_A->CTL=0x5A00 // WatchdogPassword
+            |1<<5 //Set to ACLK
+            |1<<4 //Set to interval mode
+            |1<<3 // Clear Timer
+            |4; //Set to 2^15 interval (1 seconds)
+}
+
+void WDT_A_IRQHandler(void)
+{
+    WDCount++;
+    if(WDCount == WDResetCount)
+    {
+        WDT_A->CTL=0x5A00 // WatchdogPassword
+                |1<<5 //Set to ACLK
+                |0<<4 //Set to Watchdog mode
+                |1<<3 // Clear Timer
+                |4; //Set to 2^15 interval (1 seconds)
+    }
+}
+
+
+void resetWDCount()
+{
+    WDInit();
+    WDCount = 0;
 }
