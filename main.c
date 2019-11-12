@@ -187,7 +187,7 @@ int main(void)
     read_from_flash();
 
     //Cycle through the parts
-    mainMenu();
+    displayScreen();
     //setTimeMenu();
     //setDateMenu();
     //settingsMenu();
@@ -260,7 +260,7 @@ void displayScreen()
     char c4[8] = "Weekday";         //Weekday string
     char c5[12] = "Temperature";    //Temperature string
 
-    Output_Clear();                 //Clears the output of the LCD screen
+//    Output_Clear();                 //Clears the output of the LCD screen
     ST7735_FillScreen(bgColor);     //Sets background color
     int i;                          //Integer to loop through printing the strings on the LCD
 
@@ -431,7 +431,7 @@ void settingsMenu()
     {
         if(resetFlag)
         {
-            Output_Clear();             //Clears the LCD screen
+//            Output_Clear();             //Clears the LCD screen
             ST7735_FillScreen(bgColor); //Sets background color
             resetFlag = 0;              //Flag to reset the display to page one
             //Fills the screen with all the options for the first page of the settings menu
@@ -556,7 +556,7 @@ void settingsMenu()
         case 4:
             if(resetFlag2)
             {
-                Output_Clear();             //Clears the LCD screen
+//                Output_Clear();             //Clears the LCD screen
                 ST7735_FillScreen(bgColor); //Sets background color
                 resetFlag2 = 0;             //Flag to reset the display to page two
                 //Fills the screen with all the options for the second page of the settings menu
@@ -643,7 +643,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     int i;                                  //Integer to loop through printing the strings on the LCD
     int ccw_prev = ccw;                     //Previous counter clockwise counter
     int cw_prev = cw;                       //Previous clockwise counter
-    Output_Clear();                         //Clears the LCD screen
+//    Output_Clear();                         //Clears the LCD screen
     ST7735_FillScreen(bgColor);             //Sets background color
 
     //Displays the text "Set Time"
@@ -869,7 +869,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     char c[9] = "Set Date";                 //"Set Date" string
     int weekday = 0;                        //Integer for the weekday
 
-    Output_Clear();                         //Clears the LCD screen
+//    Output_Clear();                         //Clears the LCD screen
     ST7735_FillScreen(bgColor);             //Sets background color
 
     //Displays "Set Time" on screen
@@ -1179,7 +1179,7 @@ void playlist()
     {
         if(resetFlag)
         {
-            Output_Clear();             //Clears the LCD screen
+//            Output_Clear();             //Clears the LCD screen
             ST7735_FillScreen(bgColor); //Sets background color
             resetFlag = 0;
             for(i = 0; i < s; i++)
@@ -1304,7 +1304,7 @@ void playlist()
         case 4:
             if(resetFlag2)
             {
-                Output_Clear();             //Clears the LCD screen
+                //Output_Clear();             //Clears the LCD screen
                 ST7735_FillScreen(bgColor); //Sets background color
                 resetFlag2 = 0;             //Flag to reset the display to page two
 
@@ -1403,7 +1403,7 @@ void viewAlarms()
     {
         if(resetFlag)
         {
-            Output_Clear();             //Clears the LCD screen
+//            Output_Clear();             //Clears the LCD screen
             ST7735_FillScreen(bgColor); //Sets background color
             resetFlag = 0;              //Flag to reset the display to page one
             //Fills the screen with all the options for the first page of the settings menu
@@ -1529,7 +1529,7 @@ void viewAlarms()
         case 4:
             if(resetFlag2)
             {
-                Output_Clear();
+//                Output_Clear();
                 ST7735_FillScreen(bgColor);
                 resetFlag2 = 0;
                 for(i = 0; i < s; i++)
@@ -1629,8 +1629,6 @@ void invalidInput()
     int s2 = 6;                     //Size of "Input" string
     char c[8] = "Invalid";          //"Invalid" string
     char c2[6] = "Input";           //"Input" string
-    int cw_prev = cw;               //Previous clockwise counter
-    int ccw_prev = ccw;             //Previous counter clockwise counter
     for(i = 0; i < s1; i++)
     {
         ST7735_DrawChar(i*STEP + 30, HEIGHT*(2.0/4), c[i], txtColor, bgColor, 2);
@@ -1649,15 +1647,13 @@ void resetdisplayScreen()
     int s3 = 5;                     //Size of date string
     int s4 = 8;                     //Size of weekday string
     int s5 = 12;                    //Size of temperature string
-    int cw_prev = cw;               //Previous clockwise counter
-    int ccw_prev = ccw;             //Previous counter clockwise counter
     char c1[5] = "Speed";           //Speed string
     char c2[7] = "Time";            //Time string
     char c3[5] = "Date";            //Date string
     char c4[8] = "Weekday";         //Weekday string
     char c5[12] = "Temperature";    //Temperature string
 
-    Output_Clear();                 //Clears the output of the LCD screen
+//    Output_Clear();                 //Clears the output of the LCD screen
     ST7735_FillScreen(bgColor);     //Sets background color
     int i;                          //Integer to loop through printing the strings on the LCD
 
