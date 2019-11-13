@@ -92,7 +92,6 @@ void resetWDCount();
 
 //RTC and Flash function prototypes
 void printTime(void);
-void saveAlarm(void);
 void clockInit48MHzXTL(void);
 void save_to_flash(void);
 void display_date(int i);
@@ -141,8 +140,8 @@ typedef struct
     uint8_t minute;
     uint8_t weekday;
     uint8_t AM;
-    uint8_t H24;
     uint8_t alarm;
+   char* FixLater;
 }TIME;
 
 //LCD global variables
@@ -174,7 +173,7 @@ int main(void)
     RE_setInterrupts();
     get_CLK_DT_values();
     // Enable Interrupts
-    NVIC_EnableIRQ(PORT2_IRQn);
+    NVIC_EnableIRQ(PORT5_IRQn);
     NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
     __enable_interrupt();
 
@@ -209,52 +208,46 @@ int main(void)
     //viewAlarms();
     while(1);
 
+//    while(1)
+//    {
+//        // Reads data from Real Time Clock via I^2C
+//        I2C1_burstRead(SLAVE_ADDR, 0, 7, timeDateReadback);
+//
+//
+//        if(readKeypad() == ASTERISK)
+//        {
+//
+//            saveTime(0);
+//            printTime();
+//                        for(i = 4; i >= 0; i--)
+//                        {
+//                            if(alarm[i].hour != -1)
+//                            {
+//                                printf("%x:%x:%x\n\n", alarm[i].hour, alarm[i].minute, alarm[i].second);
+//                            }
+//                        }
+//            Output_Clear();                 // Clear output
+//            ST7735_FillScreen(BLACK);       // Fills background color
+//            ST7735_SetCursor(1, 4);
+//            read_from_flash();
+//            for(i = 0; i < 5; i++)
+//            {
+//                sprintf(temp,"%x %x %x %x %x %x %x %x %x \n",
+//                        alarm[i].second,
+//                        alarm[i].minute,
+//                        alarm[i].hour,
+//                        alarm[i].weekday,
+//                        alarm[i].day,
+//                        alarm[i].month,
+//                        alarm[i].year,
+//                        alarm[i].AM,
+//                        //alarm[i].H24,
+//                        alarm[i].alarm
+//                );
+//                printf("%s\n", temp);
+//
+//            }
 
-
-    //    printTime();
-    //
-    while(1)
-    {
-        // Reads data from Real Time Clock via I^2C
-        I2C1_burstRead(SLAVE_ADDR, 0, 7, timeDateReadback);
-
-
-        if(readKeypad() == ASTERISK)
-        {
-
-            saveAlarm();
-            read_from_flash();
-            printTime();
-            //            for(i = 4; i >= 0; i--)
-            //            {
-            //                if(alarm[i].hour != -1)
-            //                {
-            //                    printf("%x:%x:%x\n\n", alarm[i].hour, alarm[i].minute, alarm[i].second);
-            //                }
-            //            //            }
-            //            Output_Clear();                 // Clear output
-            //            ST7735_FillScreen(BLACK);       // Fills background color
-            //            ST7735_SetCursor(1, 4);
-            //            read_from_flash();
-            //            for(i = 0; i < 5; i++)
-            //            {
-            //                sprintf(temp,"%x %x %x %x %x %x %x %x %x %s\n",
-            //                        alarm[i].second,
-            //                        alarm[i].minute,
-            //                        alarm[i].hour,
-            //                        alarm[i].weekday,
-            //                        alarm[i].day,
-            //                        alarm[i].month,
-            //                        alarm[i].year,
-            //                        alarm[i].AM,
-            //                        alarm[i].H24,
-            //                        alarm[i].alarm
-            //                );
-            //                printf("%s\n", temp);
-
-            //            }
-        }
-    }
 }
 
 //
@@ -1763,7 +1756,6 @@ void initAlarmTimes()
     time.minute = 0;
     time.weekday = 0;
     time.AM = 0;
-    time.H24 = 0;
 
     //Saved alarm times
     for(i = 0; i < 5;i++)
@@ -1775,8 +1767,7 @@ void initAlarmTimes()
         alarm[i].minute = 0;
         alarm[i].weekday = 0;
         alarm[i].AM = 0;
-        alarm[i].H24 = 0;
-        alarm[i].alarm = "None";
+        alarm[i].alarm = 0;
     }
 
 }
@@ -1788,9 +1779,7 @@ void delaySeconds(int i)
 
 
 
-
-
-void saveAlarm(void)
+void saveTime(uint8_t newAlarm)
 {
     int i;
     int flag = 1;
@@ -1806,8 +1795,9 @@ void saveAlarm(void)
             alarm[i].hour = timeDateReadback[2];
             alarm[i].minute = timeDateReadback[1];
             alarm[i].second = timeDateReadback[0];
+            alarm[i].alarm = newAlarm;
             flag = 0;
-            alarm[i].alarm = "none";
+           // alarm[i].alarm = timeDateReadback[7];
         }
     }
 
@@ -1823,15 +1813,23 @@ void saveAlarm(void)
             alarm[i].hour = alarm[i + 1].hour;
             alarm[i].minute = alarm[i + 1].minute;
             alarm[i].second = alarm[i + 1].second;
+            alarm[i].alarm = alarm[i + 1].alarm;
         }
 
         // Retrieving the most recent time when '*' was pressed
         alarm[4].hour = timeDateReadback[2];
         alarm[4].minute = timeDateReadback[1];
         alarm[4].second = timeDateReadback[0];
+        alarm[4].weekday = timeDateReadback[3];
+        alarm[4].day = timeDateReadback[4];
+        alarm[4].month = timeDateReadback[5];
+        alarm[4].year = timeDateReadback[6];
+        alarm[4].alarm = newAlarm;
+        //alarm[4].alarm = timeDateReadback[7];
     }
     save_to_flash();
 }
+
 
 void printTime(void)
 {
@@ -1959,30 +1957,6 @@ void save_to_flash(void)
     /* Setting the sector back to protected  */
     MAP_FlashCtl_protectSector(FLASH_INFO_MEMORY_SPACE_BANK0,FLASH_SECTOR0);
 
-    //    addr_pointer = CALIBRATION_START + 4;  // point to address in flash for saved data
-    //
-    //    for(i = 0 ; i < byte_length; i++)
-    //    {
-    //        // read values in flash after programming
-    //        read_back_data[i] = *addr_pointer++;
-    //    }
-    //
-    //
-    //    for(i = 0; i < 5; i++)
-    //    {
-    //
-    //        alarm[i].hour = read_back_data[(16 * i) + 4];
-    //        alarm[i].minute = read_back_data[(16 * i) + 5];
-    //        alarm[i].second = read_back_data[(16 * i)];
-    //
-    //        alarm[i].weekday = read_back_data[(16 * i) + 6];
-    //        alarm[i].day = read_back_data[(16 * i) + 1];
-    //        alarm[i].month = read_back_data[(16 * i) + 2];
-    //        alarm[i].year = read_back_data[(16 * i) + 3];
-    //        alarm[i].alarm = read_back_data[(16 * i) + 9];
-    //        alarm[i].AM = read_back_data[(16 * i) + 7];
-    //        alarm[i].H24 = read_back_data[(16 * i) + 8];
-    //    }
 }
 
 void read_from_flash()
@@ -2010,9 +1984,8 @@ void read_from_flash()
         alarm[i].day = read_back_data[(16 * i) + 1];
         alarm[i].month = read_back_data[(16 * i) + 2];
         alarm[i].year = read_back_data[(16 * i) + 3];
-        alarm[i].alarm = read_back_data[(16 * i) + 9];
+        alarm[i].alarm = read_back_data[(16 * i) + 8];
         alarm[i].AM = read_back_data[(16 * i) + 7];
-        alarm[i].H24 = read_back_data[(16 * i) + 8];
     }
 }
 
