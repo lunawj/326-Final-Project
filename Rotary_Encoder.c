@@ -7,7 +7,7 @@
 #include "msp.h"
 
 // Macros used for Rotary Encoder
-#define RE_PORT P2
+#define RE_PORT P5
 #define CLK BIT4
 #define DT  BIT5
 #define SW  BIT6
@@ -96,7 +96,7 @@ void get_CLK_DT_values(void)
  *      Input: none
  *     Output: none
  *********************************************************************/
-void PORT2_IRQHandler(void)
+void PORT5_IRQHandler(void)
 {
     // Flag will be set when detecting a button press from R.E.
     if(RE_PORT->IFG & BIT6)
