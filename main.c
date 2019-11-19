@@ -58,6 +58,7 @@
 #include "RTC.h"
 #include "ST7735.h"
 #include "Rotary_Encoder.h"
+#include "TeslaLogo.h"
 
 /*Boolean Macros*/
 #define TRUE  1
@@ -77,7 +78,8 @@ extern volatile uint8_t REFLAG;     //RE Button Flag
 #define STEP 10
 
 //Watchdog counter
-#define WDResetCount 120
+#define WDResetCount 180
+#define InactiveResetCount 60
 
 
 #define CALIBRATION_START 0x000200000
@@ -124,7 +126,7 @@ void songTwo();                     //Plays song 2 (Legend of Zelda Theme)
 void songThree();                   //Plays song 3 (Tetris Theme)
 void songFour();                    //Plays song 4 (Pokemon Theme)
 
-
+void SetupTimer32s();
 
 void initTimeOutTimer();            //60 second inactivity time out timers
 
@@ -141,14 +143,20 @@ typedef struct
     uint8_t weekday;
     uint8_t AM;
     uint8_t alarm;
-   char* FixLater;
+    char* FixLater;
 }TIME;
 
 //LCD global variables
 int bgColor;                        //Background color of LCD Screen
 int hlColor;                        //highlighted color of LCD Screen
 int txtColor;                       //text color of LCD Screen
+
+//WDTimer glabal variables
 uint8_t WDCount;
+uint8_t WDInactiveCount;
+uint8_t InactiveFlag;
+uint8_t InactiveCountStart;
+
 //TIME struct related global variables
 TIME time;
 TIME alarm[5];
@@ -160,13 +168,16 @@ uint8_t* addr_pointer; // pointer to address in flash for reading back values
 int main(void)
 {
     WDCount = 0;
+    WDInactiveCount = 0;
+    InactiveFlag = 0;
+    InactiveCountStart = 0;
     uint16_t BLACK = ST7735_Color565(0,0,0);
     /* Stop Watchdog  */
     MAP_WDT_A_holdTimer();
     I2C1_Initialization();          // Initializes I2C for Real Time Clock
     //    Keypad_Initialization();        //Initializes the Keypad
     clockInit48MHzXTL();            // Setting MCLK to 48MHz for faster programming
-
+    SetupTimer32s();
 
 
     rotary_encoder_initialization();
@@ -199,6 +210,9 @@ int main(void)
     NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
     __enable_interrupt();
 
+
+    ST7735_DrawBitmap(0, 160, TeslaLogo, 128, 160);
+    delaySeconds(3);
     //Cycle through the parts
     displayScreen();
     //setTimeMenu();
@@ -208,45 +222,45 @@ int main(void)
     //viewAlarms();
     while(1);
 
-//    while(1)
-//    {
-//        // Reads data from Real Time Clock via I^2C
-//        I2C1_burstRead(SLAVE_ADDR, 0, 7, timeDateReadback);
-//
-//
-//        if(readKeypad() == ASTERISK)
-//        {
-//
-//            saveTime(0);
-//            printTime();
-//                        for(i = 4; i >= 0; i--)
-//                        {
-//                            if(alarm[i].hour != -1)
-//                            {
-//                                printf("%x:%x:%x\n\n", alarm[i].hour, alarm[i].minute, alarm[i].second);
-//                            }
-//                        }
-//            Output_Clear();                 // Clear output
-//            ST7735_FillScreen(BLACK);       // Fills background color
-//            ST7735_SetCursor(1, 4);
-//            read_from_flash();
-//            for(i = 0; i < 5; i++)
-//            {
-//                sprintf(temp,"%x %x %x %x %x %x %x %x %x \n",
-//                        alarm[i].second,
-//                        alarm[i].minute,
-//                        alarm[i].hour,
-//                        alarm[i].weekday,
-//                        alarm[i].day,
-//                        alarm[i].month,
-//                        alarm[i].year,
-//                        alarm[i].AM,
-//                        //alarm[i].H24,
-//                        alarm[i].alarm
-//                );
-//                printf("%s\n", temp);
-//
-//            }
+    //    while(1)
+    //    {
+    //        // Reads data from Real Time Clock via I^2C
+    //        I2C1_burstRead(SLAVE_ADDR, 0, 7, timeDateReadback);
+    //
+    //
+    //        if(readKeypad() == ASTERISK)
+    //        {
+    //
+    //            saveTime(0);
+    //            printTime();
+    //                        for(i = 4; i >= 0; i--)
+    //                        {
+    //                            if(alarm[i].hour != -1)
+    //                            {
+    //                                printf("%x:%x:%x\n\n", alarm[i].hour, alarm[i].minute, alarm[i].second);
+    //                            }
+    //                        }
+    //            Output_Clear();                 // Clear output
+    //            ST7735_FillScreen(BLACK);       // Fills background color
+    //            ST7735_SetCursor(1, 4);
+    //            read_from_flash();
+    //            for(i = 0; i < 5; i++)
+    //            {
+    //                sprintf(temp,"%x %x %x %x %x %x %x %x %x \n",
+    //                        alarm[i].second,
+    //                        alarm[i].minute,
+    //                        alarm[i].hour,
+    //                        alarm[i].weekday,
+    //                        alarm[i].day,
+    //                        alarm[i].month,
+    //                        alarm[i].year,
+    //                        alarm[i].AM,
+    //                        //alarm[i].H24,
+    //                        alarm[i].alarm
+    //                );
+    //                printf("%s\n", temp);
+    //
+    //            }
 
 }
 
@@ -267,7 +281,8 @@ void displayScreen()
     char c4[8] = "Weekday";         //Weekday string
     char c5[12] = "Temperature";    //Temperature string
 
-//    Output_Clear();                 //Clears the output of the LCD screen
+    InactiveCountStart = 1;
+    //    Output_Clear();                 //Clears the output of the LCD screen
     ST7735_FillScreen(bgColor);     //Sets background color
     int i;                          //Integer to loop through printing the strings on the LCD
 
@@ -276,6 +291,9 @@ void displayScreen()
     while(1)
     {
         resetWDCount();
+        InactiveFlag = 0;
+        InactiveCountStart = 0;
+        WDInactiveCount = 0;
         if(REFLAG)
         {
             REFLAG = 0;
@@ -293,9 +311,9 @@ void displayScreen()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(1.0/6) + 10, c1[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
 
-            if(cw > cw_prev)        //clockwise
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))        //clockwise
             {
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -310,7 +328,7 @@ void displayScreen()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(1.0/6) + 10, c1[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
 
         case 1:                     //Position at Time
@@ -318,8 +336,8 @@ void displayScreen()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c2[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)        //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))        //clockwise
             {
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -334,15 +352,15 @@ void displayScreen()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c2[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 2:                     //Position at Date
             for(i = 0; i < s3; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c3[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)        //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))        //clockwise
             {
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -357,15 +375,15 @@ void displayScreen()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c3[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 3:                     //Position at Weekday
             for(i = 0; i < s4; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c4[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)        //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))       //clockwise
             {
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -380,15 +398,15 @@ void displayScreen()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c4[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 4:                     //Position at Temperature
             for(i = 0; i < s5; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c5[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)        //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))        //clockwise
             {
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -403,7 +421,7 @@ void displayScreen()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c5[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         default:
             pos = 0;
@@ -414,6 +432,7 @@ void displayScreen()
 
 void settingsMenu()
 {
+    InactiveCountStart = 1;
     int s = 9;                      //Size of string "Settings"
     int s1 = 9;                     //Size of string "Set Time"
     int s2 = 9;                     //Size of string "Set Date"
@@ -437,10 +456,14 @@ void settingsMenu()
     //Loops while the RE Button isn't pressed. Once it is, then the highlighted menu option will be selected
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         if(resetFlag)
         {
-//            Output_Clear();             //Clears the LCD screen
+            //            Output_Clear();             //Clears the LCD screen
             ST7735_FillScreen(bgColor); //Sets background color
             resetFlag = 0;              //Flag to reset the display to page one
             //Fills the screen with all the options for the first page of the settings menu
@@ -472,16 +495,18 @@ void settingsMenu()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
 
-            if(cw > cw_prev)                //clockwise
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))                //clockwise
             {
+                WDInactiveCount = 0;
                 ccw_prev = ccw;
                 cw_prev = cw;
                 pos = 4;
                 resetFlag2 = 1;
             }else if(ccw > ccw_prev)        //counter clockwise
             {
+                WDInactiveCount = 0;
                 ccw_prev = ccw;
                 cw_prev = cw;
                 pos++;
@@ -490,21 +515,23 @@ void settingsMenu()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 1:
             for(i = 0; i < s2; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)                //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))                //clockwise
             {
+                WDInactiveCount = 0;
                 ccw_prev = ccw;
                 cw_prev = cw;
                 pos--;
             }else if(ccw > ccw_prev)        //counter clockwise
             {
+                WDInactiveCount = 0;
                 ccw_prev = ccw;
                 cw_prev = cw;
                 pos++;
@@ -513,21 +540,23 @@ void settingsMenu()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 2:
             for(i = 0; i < s3; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)                //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))                //clockwise
             {
+                WDInactiveCount = 0;
                 ccw_prev = ccw;
                 cw_prev = cw;
                 pos--;
             }else if(ccw > ccw_prev)        //counter clockwise
             {
+                WDInactiveCount = 0;
                 ccw_prev = ccw;
                 cw_prev = cw;
                 pos++;
@@ -536,21 +565,23 @@ void settingsMenu()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 3:
             for(i = 0; i < s4; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)                //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))                //clockwise
             {
+                WDInactiveCount = 0;
                 ccw_prev = ccw;
                 cw_prev = cw;
                 pos--;
             }else if(ccw > ccw_prev)        //counter clockwise
             {
+                WDInactiveCount = 0;
                 resetFlag2 = 1;
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -560,12 +591,12 @@ void settingsMenu()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 4:
             if(resetFlag2)
             {
-//                Output_Clear();             //Clears the LCD screen
+                //                Output_Clear();             //Clears the LCD screen
                 ST7735_FillScreen(bgColor); //Sets background color
                 resetFlag2 = 0;             //Flag to reset the display to page two
                 //Fills the screen with all the options for the second page of the settings menu
@@ -578,15 +609,17 @@ void settingsMenu()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 ccw_prev = ccw;
                 cw_prev = cw;
                 pos--;
                 resetFlag = 1;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 ccw_prev = ccw;
                 cw_prev = cw;
                 pos = 0;
@@ -596,7 +629,7 @@ void settingsMenu()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         default:
             pos = 0;
@@ -604,29 +637,52 @@ void settingsMenu()
         }
     }
 
+    if(InactiveFlag)
+    {
+        return;
+    }
+
     //If RE Button is pressed, the highlighted menu option will be selected
     if(REFLAG)
     {
         REFLAG = 0;                     //RE Button flag
-
+        WDInactiveCount = 0;
+        InactiveFlag = 0;
+        InactiveCountStart = 0;
+        WDInactiveCount = 0;
         //Determines what menu option should be navigated to based off the
         //position of the cursor
         switch(pos)
         {
         case 0:
             setTimeMenu();              //Set time menu is selected
+            InactiveFlag = 0;
+            InactiveCountStart = 0;
+            WDInactiveCount = 0;
             break;
         case 1:
             setDateMenu();              //Set date menu is selected
+            InactiveFlag = 0;
+            InactiveCountStart = 0;
+            WDInactiveCount = 0;
             break;
         case 2:
             viewAlarms();               //View alarms menu is selected
+            InactiveFlag = 0;
+            InactiveCountStart = 0;
+            WDInactiveCount = 0;
             break;
         case 3:
             playlist();                 //Playlist menu is selected
+            InactiveFlag = 0;
+            InactiveCountStart = 0;
+            WDInactiveCount = 0;
             break;
         case 4:
             returnFlag = 1;             //Returns to the display screen
+            InactiveFlag = 0;
+            InactiveCountStart = 0;
+            WDInactiveCount = 0;
             break;
         default:
             break;
@@ -641,6 +697,7 @@ void settingsMenu()
 
 void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! FIX ME!!!
 {
+    InactiveCountStart = 1;
     int hour1 = time.hour / 10;             //Digit 1 of the hour
     int hour2 = time.hour % 10;             //Digit 2 of the hour
     int minute1 = time.minute / 10;         //Digit 1 of the minute
@@ -652,7 +709,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     int i;                                  //Integer to loop through printing the strings on the LCD
     int ccw_prev = ccw;                     //Previous counter clockwise counter
     int cw_prev = cw;                       //Previous clockwise counter
-//    Output_Clear();                         //Clears the LCD screen
+    //    Output_Clear();                         //Clears the LCD screen
     ST7735_FillScreen(bgColor);             //Sets background color
 
     //Displays the text "Set Time"
@@ -673,18 +730,23 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     {
         ST7735_DrawChar(i*STEP + 80, HEIGHT*(1.0/2), timeOfDay[AM][i], txtColor, bgColor, 2);
     }
-    Delay1ms(500);
+    Delay1ms(250);
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit one of the hour
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(0 + 30, HEIGHT*(1.0/2), hour1 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
 
-        if(cw > cw_prev)            //clockwise
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             if(hour1 == 0)
             {
                 hour1 = 1;
@@ -696,6 +758,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
             cw_prev = cw;
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             if(hour1 == 0)
             {
                 hour1 = 1;
@@ -707,19 +770,25 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
             cw_prev = cw;
         }
         ST7735_DrawChar(0 + 30, HEIGHT*(1.0/2), hour1 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit two of the hour
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(STEP + 30, HEIGHT*(1.0/2), hour2 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
-        if(cw > cw_prev)            //clockwise
+        Delay1ms(250);
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             hour2++;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -729,6 +798,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
             }
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             hour2--;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -738,20 +808,26 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
             }
         }
         ST7735_DrawChar(STEP + 30, HEIGHT*(1.0/2), hour2 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit one of the minute
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(3*STEP + 30, HEIGHT*(1.0/2), minute1 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
 
-        if(cw > cw_prev)            //clockwise
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             minute1++;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -761,6 +837,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
             }
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             ccw_prev = ccw;
             cw_prev = cw;
             minute1--;
@@ -770,20 +847,26 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
             }
         }
         ST7735_DrawChar(3*STEP + 30, HEIGHT*(1.0/2), minute1 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit two of the minute
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(4*STEP + 30, HEIGHT*(1.0/2), minute2 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
 
-        if(cw > cw_prev)            //clockwise
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             minute2++;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -793,6 +876,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
             }
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             minute2--;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -802,22 +886,28 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
             }
         }
         ST7735_DrawChar(4*STEP + 30, HEIGHT*(1.0/2), minute2 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the AM or PM option
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         for(i = 0; i < 3; i++)
         {
             ST7735_DrawChar(i*STEP + 80, HEIGHT*(1.0/2), timeOfDay[AM][i], hlColor, bgColor, 2);
         }
-        Delay1ms(500);
-        if(cw > cw_prev)            //clockwise
+        Delay1ms(250);
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             if(AM == 0)
             {
                 AM = 1;
@@ -829,6 +919,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
             cw_prev = cw;
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             if(AM == 0)
             {
                 AM = 1;
@@ -843,10 +934,15 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
         {
             ST7735_DrawChar(i*STEP + 80, HEIGHT*(1.0/2), timeOfDay[AM][i], txtColor, bgColor, 2);
         }
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
+    if(InactiveFlag)
+    {
+        return;
+    }
     delaySeconds(3);                                                                            //DELETE ME LATER
     //Calculates the hour and minute
     hour = hour1 * 10 + hour2;
@@ -863,11 +959,15 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     {
         invalidInput();             //Notifies the user that the entered data was invalid
     }
+    InactiveFlag = 0;
+    InactiveCountStart = 0;
+    WDInactiveCount = 0;
     return;                         //Returns to the settings menu
 }
 
 void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! FIX ME!!!
 {
+    InactiveCountStart = 1;
     int day1 = time.day / 10;               //Digit 1 of the day
     int day2 = time.day % 10;               //Digit 2 of the day
     int month1 = time.month / 10;           //Digit 1 of the month
@@ -879,11 +979,11 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     int cw_prev = cw;                       //Previous clockwise counter
     int day, year, month;                   //Integers for the year, day, and month
     //Array of strings for the weekdays
-    char week[7][10] = {"Sunday   ", "Tuesday  ", "Monday   ", "Wednesday", "Thursday ", "Friday   ", "Saturday "};
+    char week[7][10] = {"Sunday   ", "Monday   ", "Tuesday  ", "Wednesday", "Thursday ", "Friday   ", "Saturday "};
     char c[9] = "Set Date";                 //"Set Date" string
     int weekday = 0;                        //Integer for the weekday
 
-//    Output_Clear();                         //Clears the LCD screen
+    //    Output_Clear();                         //Clears the LCD screen
     ST7735_FillScreen(bgColor);             //Sets background color
 
     //Displays "Set Time" on screen
@@ -907,18 +1007,23 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     {
         ST7735_DrawChar(i*STEP + 30, HEIGHT*(3.0/4), week[weekday][i], txtColor, bgColor, 2);
     }
-    Delay1ms(500);
+    Delay1ms(250);
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit one of the month
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(0 + 20, HEIGHT*(2.0/4), month1 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
 
-        if(cw > cw_prev)            //clockwise
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             if(month1 == 0)
             {
                 month1 = 1;
@@ -930,6 +1035,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             cw_prev = cw;
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             if(month1 == 0)
             {
                 month1 = 1;
@@ -941,19 +1047,25 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             cw_prev = cw;
         }
         ST7735_DrawChar(0 + 20, HEIGHT*(2.0/4), month1 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit two of the month
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(STEP + 20, HEIGHT*(2.0/4), month2 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
-        if(cw > cw_prev)            //clockwise
+        Delay1ms(250);
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             month2++;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -963,6 +1075,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }else if(ccw > ccw_prev)     //counter clockwise
         {
+            WDInactiveCount = 0;
             month2--;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -972,20 +1085,26 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }
         ST7735_DrawChar(STEP + 20, HEIGHT*(2.0/4), month2 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit one of the day
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(3*STEP + 20, HEIGHT*(2.0/4), day1 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
 
-        if(cw > cw_prev)            //clockwise
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             day1++;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -995,6 +1114,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             day1--;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -1004,20 +1124,26 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }
         ST7735_DrawChar(3*STEP + 20, HEIGHT*(2.0/4), day1 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit two of the day
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(4*STEP + 20, HEIGHT*(2.0/4), day2 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
 
-        if(cw > cw_prev)            //clockwise
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             day2++;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -1027,6 +1153,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             day2--;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -1036,20 +1163,26 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }
         ST7735_DrawChar(4*STEP + 20, HEIGHT*(2.0/4), day2 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit one of the year
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(6*STEP + 20, HEIGHT*(2.0/4), year1 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
 
-        if(cw > cw_prev)                //clockwise
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))                //clockwise
         {
+            WDInactiveCount = 0;
             year1++;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -1059,6 +1192,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }else if(ccw > ccw_prev)        //counter clockwise
         {
+            WDInactiveCount = 0;
             year1--;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -1068,20 +1202,26 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }
         ST7735_DrawChar(6*STEP + 20, HEIGHT*(2.0/4), year1 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
 
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit two of the year
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         ST7735_DrawChar(7*STEP + 20, HEIGHT*(2.0/4), year2 + '0', hlColor, bgColor, 2);
-        Delay1ms(500);
-        if(cw > cw_prev)            //clockwise
+        Delay1ms(250);
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
         {
+            WDInactiveCount = 0;
             year2++;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -1091,6 +1231,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             year2--;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -1100,22 +1241,28 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }
         ST7735_DrawChar(7*STEP + 20, HEIGHT*(2.0/4), year2 + '0', txtColor, bgColor, 2);
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
 
     //While the RE Button is not pressed, the code will continue to highlight
     //and update the digit one of the hour
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         for(i = 0; week[weekday][i] != '\0'; i++)
         {
             ST7735_DrawChar(i*STEP + 30, HEIGHT*(3.0/4), week[weekday][i], hlColor, bgColor, 2);
         }
-        Delay1ms(500);
-        if(cw > cw_prev)            //counter clockwise
+        Delay1ms(250);
+        if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //counter clockwise
         {
+            WDInactiveCount = 0;
             weekday++;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -1125,6 +1272,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
             }
         }else if(ccw > ccw_prev)    //counter clockwise
         {
+            WDInactiveCount = 0;
             weekday--;
             ccw_prev = ccw;
             cw_prev = cw;
@@ -1137,9 +1285,16 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
         {
             ST7735_DrawChar(i*STEP + 30, HEIGHT*(3.0/4), week[weekday][i], txtColor, bgColor, 2);
         }
-        Delay1ms(500);
+        Delay1ms(250);
     }
     REFLAG = 0;
+    WDInactiveCount = 0;
+
+    if(InactiveFlag)
+    {
+        return;
+    }
+
     delaySeconds(3);                                                                            //DELETE ME LATER
     //Calculate the month, day, and year
     month = month1 * 10 + month2;
@@ -1158,6 +1313,9 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     {
         invalidInput();             //Notifies the user that the data entered is invalid
     }
+    InactiveFlag = 0;
+    InactiveCountStart = 0;
+    WDInactiveCount = 0;
 }
 
 void setBackgroundColor()
@@ -1174,6 +1332,7 @@ void setBackgroundColor()
 
 void playlist()
 {
+    InactiveCountStart = 1;
     int s = 9;                      //Size of string "Playlist"
     int s1 = 6;                     //Size of string "Song 1"
     int s2 = 6;                     //Size of string "Song 2"
@@ -1198,10 +1357,14 @@ void playlist()
     //Once it is, then the highlighted menu option will be selected
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         if(resetFlag)
         {
-//            Output_Clear();             //Clears the LCD screen
+            //            Output_Clear();             //Clears the LCD screen
             ST7735_FillScreen(bgColor); //Sets background color
             resetFlag = 0;
             for(i = 0; i < s; i++)
@@ -1234,15 +1397,17 @@ void playlist()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos = 4;
                 resetFlag2 = 1;
                 ccw_prev = ccw;
                 cw_prev = cw;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos++;
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -1251,21 +1416,23 @@ void playlist()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 1:
             for(i = 0; i < s2; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos--;
                 ccw_prev = ccw;
                 cw_prev = cw;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos++;
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -1274,21 +1441,23 @@ void playlist()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 2:
             for(i = 0; i < s3; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos--;
                 ccw_prev = ccw;
                 cw_prev = cw;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos++;
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -1297,21 +1466,23 @@ void playlist()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 3:
             for(i = 0; i < s4; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos--;
                 ccw_prev = ccw;
                 cw_prev = cw;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos++;
                 resetFlag2 = 1;
                 ccw_prev = ccw;
@@ -1321,7 +1492,7 @@ void playlist()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 4:
             if(resetFlag2)
@@ -1340,15 +1511,17 @@ void playlist()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos--;
                 resetFlag = 1;
                 ccw_prev = ccw;
                 cw_prev = cw;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos = 0;
                 resetFlag = 1;
                 ccw_prev = ccw;
@@ -1358,12 +1531,20 @@ void playlist()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         default:
             pos = 0;
             break;
         }
+    }
+
+
+    WDInactiveCount = 0;
+
+    if(InactiveFlag)
+    {
+        return;
     }
 
     //If RE Button is pressed, the highlighted menu option will be selected
@@ -1392,6 +1573,9 @@ void playlist()
         }
         if(returnFlag)                  //Returns to the display screen
         {
+            InactiveFlag = 0;
+            InactiveCountStart = 0;
+            WDInactiveCount = 0;
             return;
         }
     }
@@ -1399,6 +1583,7 @@ void playlist()
 
 void viewAlarms()
 {
+    InactiveCountStart = 1;
     int s = 6;                      //Size of string "Alarms"
     int s1 = 7;                     //Size of string "Alarms 1"
     int s2 = 7;                     //Size of string "Alarms 2"
@@ -1423,10 +1608,14 @@ void viewAlarms()
     //Once it is, then the highlighted menu option will be selected
     while(REFLAG == 0)
     {
+        if(InactiveFlag)
+        {
+            return;
+        }
         resetWDCount();
         if(resetFlag)
         {
-//            Output_Clear();             //Clears the LCD screen
+            //            Output_Clear();             //Clears the LCD screen
             ST7735_FillScreen(bgColor); //Sets background color
             resetFlag = 0;              //Flag to reset the display to page one
             //Fills the screen with all the options for the first page of the settings menu
@@ -1458,9 +1647,10 @@ void viewAlarms()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos = 4;
                 resetFlag2 = 1;
 
@@ -1468,6 +1658,7 @@ void viewAlarms()
                 cw_prev = cw;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos++;
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -1476,21 +1667,23 @@ void viewAlarms()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 1:
             for(i = 0; i < s2; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos--;
                 ccw_prev = ccw;
                 cw_prev = cw;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos++;
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -1499,22 +1692,24 @@ void viewAlarms()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 2:
             for(i = 0; i < s3; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos--;
                 ccw_prev = ccw;
                 cw_prev = cw;
 
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos++;
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -1523,21 +1718,23 @@ void viewAlarms()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 3:
             for(i = 0; i < s4; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos--;
                 ccw_prev = ccw;
                 cw_prev = cw;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos++;
                 resetFlag2 = 1;
                 ccw_prev = ccw;
@@ -1547,12 +1744,12 @@ void viewAlarms()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         case 4:
             if(resetFlag2)
             {
-//                Output_Clear();
+                //                Output_Clear();
                 ST7735_FillScreen(bgColor);
                 resetFlag2 = 0;
                 for(i = 0; i < s; i++)
@@ -1564,15 +1761,17 @@ void viewAlarms()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], hlColor, bgColor, 2);
             }
-            Delay1ms(500);
-            if(cw > cw_prev)            //clockwise
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
+                WDInactiveCount = 0;
                 pos--;
                 resetFlag = 1;
                 ccw_prev = ccw;
                 cw_prev = cw;
             }else if(ccw > ccw_prev)    //counter clockwise
             {
+                WDInactiveCount = 0;
                 pos = 0;
                 resetFlag = 1;
                 ccw_prev = ccw;
@@ -1582,17 +1781,26 @@ void viewAlarms()
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], txtColor, bgColor, 2);
             }
-            Delay1ms(500);
+            Delay1ms(250);
             break;
         default:
             pos = 0;
             break;
         }
     }
+    REFLAG = 0;
+    WDInactiveCount = 0;
+    if(InactiveFlag)
+    {
+        return;
+    }
 
 
     if(pos == 4 && returnFlag)
     {
+        InactiveFlag = 0;
+        InactiveCountStart = 0;
+        WDInactiveCount = 0;
         return;
     }
 }
@@ -1676,7 +1884,7 @@ void resetdisplayScreen()
     char c4[8] = "Weekday";         //Weekday string
     char c5[12] = "Temperature";    //Temperature string
 
-//    Output_Clear();                 //Clears the output of the LCD screen
+    //    Output_Clear();                 //Clears the output of the LCD screen
     ST7735_FillScreen(bgColor);     //Sets background color
     int i;                          //Integer to loop through printing the strings on the LCD
 
@@ -1797,7 +2005,7 @@ void saveTime(uint8_t newAlarm)
             alarm[i].second = timeDateReadback[0];
             alarm[i].alarm = newAlarm;
             flag = 0;
-           // alarm[i].alarm = timeDateReadback[7];
+            // alarm[i].alarm = timeDateReadback[7];
         }
     }
 
@@ -2151,6 +2359,10 @@ void WDInit()
 void WDT_A_IRQHandler(void)
 {
     WDCount++;
+    if(InactiveCountStart)
+    {
+        WDInactiveCount++;
+    }
     if(WDCount == WDResetCount)
     {
         WDT_A->CTL=0x5A00 // WatchdogPassword
@@ -2159,6 +2371,11 @@ void WDT_A_IRQHandler(void)
                 |1<<3 // Clear Timer
                 |4; //Set to 2^15 interval (1 seconds)
     }
+    if(WDInactiveCount == InactiveResetCount)
+    {
+        WDInactiveCount = 0;
+        InactiveFlag = 1;
+    }
 }
 
 
@@ -2166,4 +2383,37 @@ void resetWDCount()
 {
     WDInit();
     WDCount = 0;
+}
+
+/*-------------------------------------------------------------------------------------------------------------------------------
+ *
+ * void SetupTimer32s()
+ *
+ * Configures Timer32_1 as a single shot (runs once) timer that does not interrupt so the value must be monitored.
+ * Configures Timer32_2 as a single shot (runs once) timer that does interrupt and will run the interrupt handler 1 second
+ * after this function is called (and the master interrupt is enabled).
+ *
+-------------------------------------------------------------------------------------------------------------------------------*/
+void SetupTimer32s()
+{
+    TIMER32_1->CONTROL = 0b11000011;                //Sets timer 1 for Enabled, Periodic, No Interrupt, No Prescaler, 32 bit mode, One Shot Mode.  See 589 of the reference manual
+    TIMER32_2->CONTROL = 0b11100011;                //Sets timer 2 for Enabled, Periodic, With Interrupt, No Prescaler, 32 bit mode, One Shot Mode.  See 589 of the reference manual
+    NVIC_EnableIRQ(T32_INT2_IRQn);                  //Enable Timer32_2 interrupt.  Look at msp.h if you want to see what all these are called.
+    TIMER32_2->LOAD = (48000000 / 10) - 1;          //Load into interrupt count down 10 milliseconds on 48 MHz clock
+}
+
+void T32_INT2_IRQHandler()
+{
+
+    TIMER32_2->INTCLR = 1;                                      //Clear interrupt flag so it does not interrupt again immediately.
+//    if(readTemp() >= 120)
+//    {
+//        alarmOne();
+//    }
+//
+//    if(readUSS() <= 15)
+//    {
+//        alarmTwo();
+//    }
+    TIMER32_2->LOAD = (48000000 / 10) - 1;                       //Load into interrupt count down 10 milliseconds
 }
