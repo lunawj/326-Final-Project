@@ -59,6 +59,8 @@
 #include "ST7735.h"
 #include "Rotary_Encoder.h"
 #include "TeslaLogo.h"
+#include "TimerA.h"
+
 
 /*Boolean Macros*/
 #define TRUE  1
@@ -102,6 +104,11 @@ void read_from_flash();
 extern unsigned char timeDateToSet[15];
 extern unsigned char timeDateReadback[7];
 
+
+
+int conv_to_inch = 3 * 148;
+extern volatile unsigned int currentedge;
+
 char flashTime[70];
 
 //Function prototypes
@@ -125,11 +132,23 @@ void songOne();                     //Plays song 1 (Mario Theme)
 void songTwo();                     //Plays song 2 (Legend of Zelda Theme)
 void songThree();                   //Plays song 3 (Tetris Theme)
 void songFour();                    //Plays song 4 (Pokemon Theme)
+void songFive();                    //Plays song 5 (Shadow of the Colossus Theme) Alarm 1
+void songSix();                     //Plays song 6 (Undertale Theme) Alarm 2
+void stopSong();                    //Stops playing music
+
+
+void alarmOne();                    //
+void alarmTwo();                    //
+void alarmOneOff();                 //
+void alarmTwoOff();                 //
 
 void SetupTimer32s();
 
 void initTimeOutTimer();            //60 second inactivity time out timers
 
+void USS_TRIG_Initialization();
+int readUSS();
+int readTemp();
 
 //Struct to time and dates
 typedef struct
@@ -178,6 +197,9 @@ int main(void)
     //    Keypad_Initialization();        //Initializes the Keypad
     clockInit48MHzXTL();            // Setting MCLK to 48MHz for faster programming
     SetupTimer32s();
+
+    USS_TRIG_Initialization();
+    NVIC_EnableIRQ(TA1_N_IRQn);
 
 
     rotary_encoder_initialization();
@@ -1931,6 +1953,21 @@ void songFour()
 
 }
 
+void songFive()
+{
+
+}
+
+void songSix()
+{
+
+}
+
+void stopSong()
+{
+
+}
+
 //Altered clock initialization code obtain from Dr.Krug
 void init48MHz()
 {
@@ -2406,14 +2443,64 @@ void T32_INT2_IRQHandler()
 {
 
     TIMER32_2->INTCLR = 1;                                      //Clear interrupt flag so it does not interrupt again immediately.
-//    if(readTemp() >= 120)
+//    if(readTemp() >= 120 && alarmOneFlag == 0)
 //    {
 //        alarmOne();
+//        alarmOneFlag = 1;
+//    }else if(!(readTemp() >= 120))
+//    {
+//        alarmOneFlag++;
+//        if(alarmTwoFlag >= 0)
+//        {
+//            alarmOneFlag = 0;
+//            alarmOneOff();
+//        }
 //    }
 //
-//    if(readUSS() <= 15)
+//    if(readUSS() <= 15 && alarmTwoFlag == 0)
 //    {
+//
 //        alarmTwo();
+//        alarmTwoFlag = 1;
+//    }else(!(readUSS() <= 15))
+//    {
+//        alarmTwoFlag++;
+//        if(alarmTwoFlag >= 0)
+//        {
+//            alarmTwoFlag = 0;
+//            alarmTwoOff();
+//        }
 //    }
     TIMER32_2->LOAD = (48000000 / 10) - 1;                       //Load into interrupt count down 10 milliseconds
 }
+
+
+
+//int readUSS()
+//{
+//    return (int)((currentedge / conv_to_inch) - 3);
+//}
+//
+//int readTemp()
+//{
+//    return ((int));
+//}
+//void alarmOne()
+//{
+//    songFive();
+//}
+//
+//void alarmTwo()
+//{
+//    songSix();
+//}
+//
+//void alarmOneOff()
+//{
+//    stopSong();
+//}
+//
+//void alarmTwoOff()
+//{
+//    stopSong();
+//}
