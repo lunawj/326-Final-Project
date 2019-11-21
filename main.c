@@ -61,6 +61,18 @@
 #include "TeslaLogo.h"
 #include "TimerA.h"
 
+//I2C
+// Definitions
+#define S1 BIT1
+#define SLAVE_ADDRESS 0x48
+
+// Global Variable
+char TXData[7] = "0123456";
+int TXDataCount = 0;
+
+int distance;
+
+
 
 /*Boolean Macros*/
 #define TRUE  1
@@ -104,10 +116,12 @@ void read_from_flash();
 extern unsigned char timeDateToSet[15];
 extern unsigned char timeDateReadback[7];
 
-
-
 int conv_to_inch = 3 * 148;
 extern volatile unsigned int currentedge;
+
+
+int alarmOneFlag = 0;
+int alarmTwoFlag = 0;
 
 char flashTime[70];
 
@@ -186,6 +200,49 @@ uint8_t* addr_pointer; // pointer to address in flash for reading back values
 
 int main(void)
 {
+    // ---------- Code was copied from Lecture 7 by Dr. Krug ----------
+    // ----------------------------------------------------------------
+    // Allows button 1, on the MSP, to be used for input
+    P1->DIR &= ~S1;
+    P1->REN = S1;
+    P1->OUT = S1;
+    P1->IE = S1;
+    P1->IES = S1;
+    P1->IFG = 0x00;
+
+    P1->SEL0 |= BIT6 | BIT7; // P1.6 and P1.7 as UCB0SDA and UCB0SCL
+
+    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_SWRST; // Hold EUSCI_B0 module in reset state
+    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_MODE_3 | EUSCI_B_CTLW0_MST | EUSCI_B_CTLW0_SYNC;
+    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_UCSSEL_2; // Select SMCLK as EUSCI_B0 clock
+    EUSCI_B0->BRW = 0x001E; // Set BITCLK = BRCLK / (UCBRx+1) = 3 MHz / 30 = 100 kHz
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS;
+    EUSCI_B0->CTLW0 &= ~EUSCI_B_CTLW0_SWRST; // Clear SWRST to resume operation
+
+    NVIC->ISER[1] = 0x00000008; // Port P1 interrupt is enabled in NVIC
+    NVIC->ISER[0] = 0x00100000; // EUSCI_B0 interrupt is enabled in NVIC
+//    __enable_irq(); // All interrupts are enabled
+
+    while (EUSCI_B0->CTLW0 & EUSCI_B_CTLW0_TXSTP);
+    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_TR | EUSCI_B_CTLW0_TXSTT;
+//
+//    SCB->SCR |= SCB_SCR_SLEEPONEXIT_Msk; // Sleep on exit
+//    __sleep(); // enter LPM0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     WDCount = 0;
     WDInactiveCount = 0;
     InactiveFlag = 0;
@@ -193,14 +250,16 @@ int main(void)
     uint16_t BLACK = ST7735_Color565(0,0,0);
     /* Stop Watchdog  */
     MAP_WDT_A_holdTimer();
-    I2C1_Initialization();          // Initializes I2C for Real Time Clock
+ //   I2C1_Initialization();          // Initializes I2C for Real Time Clock
     //    Keypad_Initialization();        //Initializes the Keypad
-    clockInit48MHzXTL();            // Setting MCLK to 48MHz for faster programming
+    //clockInit48MHzXTL();            // Setting MCLK to 48MHz for faster programming
+    init48MHz();
     SetupTimer32s();
 
     USS_TRIG_Initialization();
     NVIC_EnableIRQ(TA1_N_IRQn);
 
+    __enable_irq(); // All interrupts are enabled
 
     rotary_encoder_initialization();
     RE_setInterrupts();
@@ -212,7 +271,7 @@ int main(void)
 
 
     // Sends data to Real Time Clock
-    I2C1_burstWrite(SLAVE_ADDR, 0, 7, timeDateToSet);
+    //    I2C1_burstWrite(SLAVE_ADDR, 0, 7, timeDateToSet);
 
     //    Output_On();                    // Turn on LCD
     //    ST7735_InitR(INITR_BLACKTAB);   // Initialize LCD
@@ -235,13 +294,12 @@ int main(void)
 
     ST7735_DrawBitmap(0, 160, TeslaLogo, 128, 160);
     delaySeconds(3);
-    //Cycle through the parts
     displayScreen();
-    //setTimeMenu();
-    //setDateMenu();
-    //settingsMenu();
-    //playlist();
-    //viewAlarms();
+
+
+
+
+
     while(1);
 
     //    while(1)
@@ -965,7 +1023,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
     {
         return;
     }
-    delaySeconds(3);                                                                            //DELETE ME LATER
+    Delay1ms(250);                                                                            //DELETE ME LATER
     //Calculates the hour and minute
     hour = hour1 * 10 + hour2;
     minute = minute1 * 10 + minute2;
@@ -1317,7 +1375,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
         return;
     }
 
-    delaySeconds(3);                                                                            //DELETE ME LATER
+    Delay1ms(250);                                                                         //DELETE ME LATER
     //Calculate the month, day, and year
     month = month1 * 10 + month2;
     day = day1 * 10 + day2;
@@ -1360,7 +1418,9 @@ void playlist()
     int s2 = 6;                     //Size of string "Song 2"
     int s3 = 6;                     //Size of string "Song 3"
     int s4 = 6;                     //Size of string "Song 4"
-    int s5 = 5;                     //Size of string "Song 5"
+    int s5 = 7;                     //Size of string "Alarm 1"
+    int s6 = 7;                     //Size of string "Alarm 2"
+    int s7 = 5;                     //Size of string "Back"
     int pos = 0;                    //Position of which string is emphasized (blinking) and will be selected
     int i;                          //Integer to loop through printing the strings on the LCD
     int ccw_prev = ccw;             //Previous counter clockwise counter
@@ -1370,7 +1430,9 @@ void playlist()
     char c2[9] = "Song 2";          //String "Song 2"
     char c3[12] = "Song 3";         //String "Song 3"
     char c4[9] = "Song 4";          //String "Song 4"
-    char c5[5] = "Back";            //String "Back"
+    char c5[] = "Alarm 1";          //String "Alarm 1"
+    char c6[] = "Alarm 2";          //String "Alarm 2"
+    char c7[5] = "Back";            //String "Back"
     int resetFlag = 1;              //Flag to reset the display to page one
     int resetFlag2 = 1;             //Flag to reset the display to page two
     int returnFlag = 0;             //Determines whether to return to the display screen
@@ -1423,7 +1485,7 @@ void playlist()
             if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
             {
                 WDInactiveCount = 0;
-                pos = 4;
+                pos = 6;
                 resetFlag2 = 1;
                 ccw_prev = ccw;
                 cw_prev = cw;
@@ -1528,6 +1590,19 @@ void playlist()
                 {
                     ST7735_DrawChar(i*STEP + 20, HEIGHT*(1.0/6) + 10, c[i], txtColor, bgColor, 2);
                 }
+                for(i = 0; i < s5; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], txtColor, bgColor, 2);
+                }
+                for(i = 0; i < s6; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c6[i], txtColor, bgColor, 2);
+                }
+                for(i = 0; i < s7; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c7[i], txtColor, bgColor, 2);
+                }
+
             }
             for(i = 0; i < s5; i++)
             {
@@ -1544,14 +1619,89 @@ void playlist()
             }else if(ccw > ccw_prev)    //counter clockwise
             {
                 WDInactiveCount = 0;
-                pos = 0;
-                resetFlag = 1;
+                pos++;
                 ccw_prev = ccw;
                 cw_prev = cw;
             }
             for(i = 0; i < s5; i++)
             {
                 ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], txtColor, bgColor, 2);
+            }
+            Delay1ms(250);
+            break;
+        case 5:
+            for(i = 0; i < s6; i++)
+            {
+                ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c6[i], hlColor, bgColor, 2);
+            }
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
+            {
+                WDInactiveCount = 0;
+                pos--;
+                ccw_prev = ccw;
+                cw_prev = cw;
+            }else if(ccw > ccw_prev)    //counter clockwise
+            {
+                WDInactiveCount = 0;
+                pos++;
+                ccw_prev = ccw;
+                cw_prev = cw;
+            }
+            for(i = 0; i < s6; i++)
+            {
+                ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c6[i], txtColor, bgColor, 2);
+            }
+            Delay1ms(250);
+            break;
+        case 6:
+            if(resetFlag2)
+            {
+                //Output_Clear();             //Clears the LCD screen
+                ST7735_FillScreen(bgColor); //Sets background color
+                resetFlag2 = 0;             //Flag to reset the display to page two
+
+                //Fills the screen with all the options for the second page of the playlist menu
+                for(i = 0; i < s; i++)
+                {
+                    ST7735_DrawChar(i*STEP + 20, HEIGHT*(1.0/6) + 10, c[i], txtColor, bgColor, 2);
+                }
+                for(i = 0; i < s5; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], txtColor, bgColor, 2);
+                }
+                for(i = 0; i < s6; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c6[i], txtColor, bgColor, 2);
+                }
+                for(i = 0; i < s7; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c7[i], txtColor, bgColor, 2);
+                }
+
+            }
+            for(i = 0; i < s7; i++)
+            {
+                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c7[i], hlColor, bgColor, 2);
+            }
+            Delay1ms(250);
+            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
+            {
+                WDInactiveCount = 0;
+                pos--;
+                ccw_prev = ccw;
+                cw_prev = cw;
+            }else if(ccw > ccw_prev)    //counter clockwise
+            {
+                WDInactiveCount = 0;
+                pos = 0;
+                resetFlag = 1;
+                ccw_prev = ccw;
+                cw_prev = cw;
+            }
+            for(i = 0; i < s7; i++)
+            {
+                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c7[i], txtColor, bgColor, 2);
             }
             Delay1ms(250);
             break;
@@ -1588,6 +1738,12 @@ void playlist()
             songFour();                 //Song four is selected
             break;
         case 4:
+            songFive();                 //Song four is selected
+            break;
+        case 5:
+            songSix();                 //Song four is selected
+            break;
+        case 6:
             returnFlag = 1;             //Returns to the display screen
             break;
         default:
@@ -1877,6 +2033,7 @@ int verifyTime(int hour, int minute)
 
 void invalidInput()
 {
+    ST7735_FillScreen(bgColor);     //Sets background color
     int i;                          //Integer to loop through printing the strings on the LCD
     int s1 = 8;                     //Size of "Invalid" string
     int s2 = 6;                     //Size of "Input" string
@@ -1890,7 +2047,7 @@ void invalidInput()
     {
         ST7735_DrawChar(i*STEP + 30, HEIGHT*(3.0/4), c2[i], txtColor, bgColor, 2);
     }
-    delaySeconds(3);
+    delaySeconds(1);
 }
 
 void resetdisplayScreen()
@@ -1935,37 +2092,44 @@ void resetdisplayScreen()
 
 void songOne()
 {
-
+    TXDataCount = 0;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songTwo()
 {
-
+    TXDataCount = 1;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songThree()
 {
-
+    TXDataCount = 2;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songFour()
 {
-
+    TXDataCount = 3;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songFive()
 {
-
+    TXDataCount = 4;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songSix()
 {
-
+    TXDataCount = 5;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void stopSong()
 {
-
+    TXDataCount = 6;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 //Altered clock initialization code obtain from Dr.Krug
@@ -2441,66 +2605,93 @@ void SetupTimer32s()
 
 void T32_INT2_IRQHandler()
 {
-
     TIMER32_2->INTCLR = 1;                                      //Clear interrupt flag so it does not interrupt again immediately.
-//    if(readTemp() >= 120 && alarmOneFlag == 0)
-//    {
-//        alarmOne();
-//        alarmOneFlag = 1;
-//    }else if(!(readTemp() >= 120))
-//    {
-//        alarmOneFlag++;
-//        if(alarmTwoFlag >= 0)
-//        {
-//            alarmOneFlag = 0;
-//            alarmOneOff();
-//        }
-//    }
-//
-//    if(readUSS() <= 15 && alarmTwoFlag == 0)
-//    {
-//
-//        alarmTwo();
-//        alarmTwoFlag = 1;
-//    }else(!(readUSS() <= 15))
-//    {
-//        alarmTwoFlag++;
-//        if(alarmTwoFlag >= 0)
-//        {
-//            alarmTwoFlag = 0;
-//            alarmTwoOff();
-//        }
-//    }
+    distance = readUSS();
+
+    //    if(readTemp() >= 120 && alarmOneFlag == 0)
+    //    {
+    //        alarmOne();
+    //        alarmOneFlag = 1;
+    //    }else if(!(readTemp() >= 120))
+    //    {
+    //        alarmOneFlag++;
+    //        if(alarmTwoFlag >= 0)
+    //        {
+    //            alarmOneFlag = 0;
+    //            alarmOneOff();
+    //        }
+    //    }
+    //
+
+        if(distance <= 15 && alarmTwoFlag == 0)
+        {
+            alarmTwo();
+            alarmTwoFlag = 1;
+        }else if(!(distance <= 15))
+        {
+            alarmTwoFlag = 0;
+            alarmTwoOff();
+        }
     TIMER32_2->LOAD = (48000000 / 10) - 1;                       //Load into interrupt count down 10 milliseconds
 }
 
 
 
-//int readUSS()
-//{
-//    return (int)((currentedge / conv_to_inch) - 3);
-//}
-//
+int readUSS()
+{
+    return ((currentedge / conv_to_inch) - 3);
+}
+
 //int readTemp()
 //{
 //    return ((int));
 //}
-//void alarmOne()
-//{
-//    songFive();
-//}
-//
-//void alarmTwo()
-//{
-//    songSix();
-//}
-//
-//void alarmOneOff()
-//{
-//    stopSong();
-//}
-//
-//void alarmTwoOff()
-//{
-//    stopSong();
-//}
+void alarmOne()
+{
+    songFive();
+}
+
+void alarmTwo()
+{
+    songSix();
+}
+
+void alarmOneOff()
+{
+    stopSong();
+}
+
+void alarmTwoOff()
+{
+    stopSong();
+}
+
+void EUSCIB0_IRQHandler(void)
+{
+    if(TXDataCount >= 7)
+    {
+        TXDataCount = 0;
+    }
+    uint32_t status = EUSCI_B0->IFG; // Get EUSCI_B0 interrupt flag
+
+    EUSCI_B0->IFG &=~ EUSCI_B_IFG_TXIFG0; // Clear EUSCI_B0 TX interrupt flag
+
+    if(status & EUSCI_B_IFG_TXIFG0) // Check if transmit interrupt occurs
+    {
+        EUSCI_B0->TXBUF = TXData[TXDataCount]; // Load current TXData value to transmit buffer
+        EUSCI_B0->IE &= ~EUSCI_B_IE_TXIE0;  // Disable EUSCI_B0 TX interrupt
+    }
+}
+
+void PORT1_IRQHandler(void)
+{
+    uint32_t status = P1->IFG;
+
+    P1->IFG &= ~S1;
+    if(status & S1)
+    {
+        TXDataCount++;
+        EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    }
+}
+
