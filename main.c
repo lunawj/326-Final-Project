@@ -67,7 +67,7 @@
 #define SLAVE_ADDRESS 0x48
 
 // Global Variable
-char TXData[7] = "0123456";
+char TXData[9] = "012345678";
 int TXDataCount = 0;
 
 int distance;
@@ -2092,36 +2092,48 @@ void resetdisplayScreen()
 
 void songOne()
 {
+    TXDataCount = 8;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
     TXDataCount = 0;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songTwo()
 {
+    TXDataCount = 8;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
     TXDataCount = 1;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songThree()
 {
+    TXDataCount = 8;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
     TXDataCount = 2;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songFour()
 {
+    TXDataCount = 8;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
     TXDataCount = 3;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songFive()
 {
+    TXDataCount = 8;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
     TXDataCount = 4;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
 
 void songSix()
 {
+    TXDataCount = 8;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
     TXDataCount = 5;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
 }
@@ -2623,14 +2635,24 @@ void T32_INT2_IRQHandler()
     //    }
     //
 
-        if(distance <= 15 && alarmTwoFlag == 0)
+        if(distance <= 15)
         {
-            alarmTwo();
-            alarmTwoFlag = 1;
+            if(alarmTwoFlag == 5)
+            {
+                alarmTwo();
+            }
+            alarmTwoFlag++;
+            if(alarmTwoFlag >= 6)
+            {
+                alarmTwoFlag = 10;
+            }
         }else if(!(distance <= 15))
         {
-            alarmTwoFlag = 0;
-            alarmTwoOff();
+            if(alarmTwoFlag == 6)
+            {
+                alarmTwoOff();
+            }
+            alarmTwoFlag--;
         }
     TIMER32_2->LOAD = (48000000 / 10) - 1;                       //Load into interrupt count down 10 milliseconds
 }
@@ -2648,11 +2670,15 @@ int readUSS()
 //}
 void alarmOne()
 {
+    TXDataCount = 7;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
     songFive();
 }
 
 void alarmTwo()
 {
+    TXDataCount = 7;
+    EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
     songSix();
 }
 
