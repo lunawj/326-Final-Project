@@ -64,7 +64,8 @@
 //I2C
 // Definitions
 #define S1 BIT1
-#define SLAVE_ADDRESS 0x48
+#define SLAVE_ADDRESS_MSP 0x48
+#define SLAVE_ADDRESS_RTC 0x68
 
 // Global Variable
 char TXData[9] = "012345678";
@@ -92,9 +93,11 @@ extern volatile uint8_t REFLAG;     //RE Button Flag
 #define STEP 10
 
 //Watchdog counter
-#define WDResetCount 180
+#define WDResetCount 10
 #define InactiveResetCount 60
 
+#define ClockBit12Hour 0b1000000
+#define PMbit          0b100000
 
 #define CALIBRATION_START 0x000200000
 #define SLAVE_ADDR 0x68     // DS1337
@@ -112,6 +115,9 @@ void clockInit48MHzXTL(void);
 void save_to_flash(void);
 void display_date(int i);
 void read_from_flash();
+
+void updateTime();
+void updateTimeStruct();
 
 extern unsigned char timeDateToSet[15];
 extern unsigned char timeDateReadback[7];
@@ -155,6 +161,7 @@ void alarmOne();                    //
 void alarmTwo();                    //
 void alarmOneOff();                 //
 void alarmTwoOff();                 //
+void initLED();
 
 void SetupTimer32s();
 
@@ -163,6 +170,7 @@ void initTimeOutTimer();            //60 second inactivity time out timers
 void USS_TRIG_Initialization();
 int readUSS();
 int readTemp();
+
 
 //Struct to time and dates
 typedef struct
@@ -210,24 +218,24 @@ int main(void)
     P1->IES = S1;
     P1->IFG = 0x00;
 
-    P1->SEL0 |= BIT6 | BIT7; // P1.6 and P1.7 as UCB0SDA and UCB0SCL
+    P1->SEL0 |= BIT6 | BIT7; // P1.6 and P1.7 as UCB0SDA and UCB0SCL respectively
 
-    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_SWRST; // Hold EUSCI_B0 module in reset state
-    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_MODE_3 | EUSCI_B_CTLW0_MST | EUSCI_B_CTLW0_SYNC;
-    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_UCSSEL_2; // Select SMCLK as EUSCI_B0 clock
-    EUSCI_B0->BRW = 0x001E; // Set BITCLK = BRCLK / (UCBRx+1) = 3 MHz / 30 = 100 kHz
-    EUSCI_B0->I2CSA = SLAVE_ADDRESS;
-    EUSCI_B0->CTLW0 &= ~EUSCI_B_CTLW0_SWRST; // Clear SWRST to resume operation
+    //    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_SWRST; // Hold EUSCI_B0 module in reset state
+    //    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_MODE_3 | EUSCI_B_CTLW0_MST | EUSCI_B_CTLW0_SYNC;
+    //    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_UCSSEL_2; // Select SMCLK as EUSCI_B0 clock
+    //    EUSCI_B0->BRW = 0x001E; // Set BITCLK = BRCLK / (UCBRx+1) = 3 MHz / 30 = 100 kHz
+    //    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
+    //    EUSCI_B0->CTLW0 &= ~EUSCI_B_CTLW0_SWRST; // Clear SWRST to resume operation
 
     NVIC->ISER[1] = 0x00000008; // Port P1 interrupt is enabled in NVIC
     NVIC->ISER[0] = 0x00100000; // EUSCI_B0 interrupt is enabled in NVIC
-//    __enable_irq(); // All interrupts are enabled
+    //    __enable_irq(); // All interrupts are enabled
 
     while (EUSCI_B0->CTLW0 & EUSCI_B_CTLW0_TXSTP);
     EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_TR | EUSCI_B_CTLW0_TXSTT;
-//
-//    SCB->SCR |= SCB_SCR_SLEEPONEXIT_Msk; // Sleep on exit
-//    __sleep(); // enter LPM0
+    //
+    //    SCB->SCR |= SCB_SCR_SLEEPONEXIT_Msk; // Sleep on exit
+    //    __sleep(); // enter LPM0
 
 
 
@@ -242,7 +250,7 @@ int main(void)
 
 
 
-
+    initLED();
     WDCount = 0;
     WDInactiveCount = 0;
     InactiveFlag = 0;
@@ -250,7 +258,7 @@ int main(void)
     uint16_t BLACK = ST7735_Color565(0,0,0);
     /* Stop Watchdog  */
     MAP_WDT_A_holdTimer();
- //   I2C1_Initialization();          // Initializes I2C for Real Time Clock
+    I2C1_Initialization();          // Initializes I2C for Real Time Clock
     //    Keypad_Initialization();        //Initializes the Keypad
     //clockInit48MHzXTL();            // Setting MCLK to 48MHz for faster programming
     init48MHz();
@@ -291,9 +299,11 @@ int main(void)
     NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
     __enable_interrupt();
 
-
+    I2C1_burstWrite(SLAVE_ADDRESS_RTC, 0, 7, timeDateToSet);
     ST7735_DrawBitmap(0, 160, TeslaLogo, 128, 160);
     delaySeconds(3);
+    REFLAG = 0;
+    updateTimeStruct();
     displayScreen();
 
 
@@ -348,18 +358,30 @@ int main(void)
 void displayScreen()
 {
     int s1 = 5;                     //Size of speed string
-    int s2 = 7;                     //Size of time string
-    int s3 = 5;                     //Size of date string
-    int s4 = 8;                     //Size of weekday string
+    int s2 = 10;                     //Size of time string
+    int s3 = 10;                     //Size of date string
+    int s4 = 10;                     //Size of weekday string
     int s5 = 12;                    //Size of temperature string
     int pos = 0;                    //Position of which string is emphasized (blinking)
     int cw_prev = cw;               //Previous clockwise counter
     int ccw_prev = ccw;             //Previous counter clockwise counter
     char c1[5] = "Speed";           //Speed string
-    char c2[7] = "Time";            //Time string
-    char c3[5] = "Date";            //Date string
-    char c4[8] = "Weekday";         //Weekday string
+    char c2[10] = "Time";            //Time string
+    char c3[10] = "Date";            //Date string
+    //char c4[10] = "Weekday";         //Weekday string
     char c5[12] = "Temperature";    //Temperature string
+    //Array of strings for the weekdays
+    char week[7][10] = {"Sunday   ", "Monday   ", "Tuesday  ", "Wednesday", "Thursday ", "Friday   ", "Saturday "};
+
+    I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 7, timeDateReadback);
+    if(timeDateReadback[2] & PMbit)
+    {
+        sprintf(c2,"%02x:%02xPM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+    }else
+    {
+        sprintf(c2,"%02x:%02xAM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+    }
+    sprintf(c3,"%02x/%02x/%02x",timeDateReadback[5],timeDateReadback[4],timeDateReadback[6]);
 
     InactiveCountStart = 1;
     //    Output_Clear();                 //Clears the output of the LCD screen
@@ -378,6 +400,7 @@ void displayScreen()
         {
             REFLAG = 0;
             settingsMenu();         //If the RE Button is pressed, go to the settings menu
+            ST7735_FillScreen(bgColor);             //Sets background color
             resetdisplayScreen();   //Resets the display screen after returning from the settings menu
         }
 
@@ -460,7 +483,7 @@ void displayScreen()
         case 3:                     //Position at Weekday
             for(i = 0; i < s4; i++)
             {
-                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c4[i], hlColor, bgColor, 2);
+                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, week[timeDateReadback[3]][i], hlColor, bgColor, 2);
             }
             Delay1ms(250);
             if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))       //clockwise
@@ -476,7 +499,7 @@ void displayScreen()
             }
             for(i = 0; i < s4; i++)
             {
-                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c4[i], txtColor, bgColor, 2);
+                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, week[timeDateReadback[3]][i], txtColor, bgColor, 2);
             }
             Delay1ms(250);
             break;
@@ -507,6 +530,18 @@ void displayScreen()
             pos = 0;
             break;
         }
+        I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 7, timeDateReadback);
+        //        if(timeDateReadback[2])
+        if(timeDateReadback[2] & PMbit)
+        {
+            sprintf(c2,"%02x:%02xPM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+        }else
+        {
+            sprintf(c2,"%02x:%02xAM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+        }
+        sprintf(c3,"%02x/%02x/%02x",timeDateReadback[5],timeDateReadback[4],timeDateReadback[6]);
+        resetdisplayScreen();           //resets the screen display
+
     }
 }
 
@@ -777,13 +812,14 @@ void settingsMenu()
 
 void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! FIX ME!!!
 {
+    updateTimeStruct();
     InactiveCountStart = 1;
     int hour1 = time.hour / 10;             //Digit 1 of the hour
     int hour2 = time.hour % 10;             //Digit 2 of the hour
     int minute1 = time.minute / 10;         //Digit 1 of the minute
     int minute2 = time.minute % 10;         //Digit 2 of the minute
     int hour, minute;                       //Integers for the hour and minutes
-    int AM = 0;                             //AM or PM time
+    int AM = time.AM;                       //AM or PM time
     char c[9] = "Set Time";                 //"Set Time" string
     char timeOfDay[2][3] = {"PM", "AM"};    //"AM","PM" string array
     int i;                                  //Integer to loop through printing the strings on the LCD
@@ -1035,6 +1071,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
         time.hour = hour;
         time.minute = minute;
         time.AM = AM;
+        updateTime();
     }else
     {
         invalidInput();             //Notifies the user that the entered data was invalid
@@ -1047,6 +1084,7 @@ void setTimeMenu()                          //MUST READ TIME FROM RTC FIRST!!! F
 
 void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! FIX ME!!!
 {
+    updateTimeStruct();
     InactiveCountStart = 1;
     int day1 = time.day / 10;               //Digit 1 of the day
     int day2 = time.day % 10;               //Digit 2 of the day
@@ -1389,6 +1427,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
         time.month = month;
         time.year = year;
         time.weekday = weekday;
+        updateTime();
     }else
     {
         invalidInput();             //Notifies the user that the data entered is invalid
@@ -1761,226 +1800,228 @@ void playlist()
 
 void viewAlarms()
 {
-    InactiveCountStart = 1;
-    int s = 6;                      //Size of string "Alarms"
-    int s1 = 7;                     //Size of string "Alarms 1"
-    int s2 = 7;                     //Size of string "Alarms 2"
-    int s3 = 7;                     //Size of string "Alarms 3"
-    int s4 = 7;                     //Size of string "Alarms 4"
-    int s5 = 5;                     //Size of string "Alarms 5"
-    int pos = 0;                    //Position of which string is emphasized (blinking) and will be selected
-    int ccw_prev = ccw;             //Previous counter clockwise counter
-    int cw_prev = cw;               //Previous clockwise counter
-    char c[9] = "Alarms";           //String "Alarms 1"
-    char c1[9] = "Alarm 1";         //String "Alarms 2"
-    char c2[9] = "Alarm 2";         //String "Alarms 3"
-    char c3[12] = "Alarm 3";        //String "Alarms 4"
-    char c4[9] = "Alarm 4";         //String "Alarms 5"
-    char c5[5] = "Back";            //Size of string "Back"
-    int i;                          //Integer to loop through printing the strings on the LCD
-    int resetFlag = 1;              //Flag to reset the display to page one
-    int resetFlag2 = 1;             //Flag to reset the display to page two
-    int returnFlag = 0;             //Determines whether to return to the display screen
-
-    //Loops while the RE Button isn't pressed.
-    //Once it is, then the highlighted menu option will be selected
-    while(REFLAG == 0)
-    {
-        if(InactiveFlag)
-        {
-            return;
-        }
-        resetWDCount();
-        if(resetFlag)
-        {
-            //            Output_Clear();             //Clears the LCD screen
-            ST7735_FillScreen(bgColor); //Sets background color
-            resetFlag = 0;              //Flag to reset the display to page one
-            //Fills the screen with all the options for the first page of the settings menu
-            for(i = 0; i < s; i++)
-            {
-                ST7735_DrawChar(i*STEP + 20, HEIGHT*(1.0/6) + 10, c[i], txtColor, bgColor, 2);
-            }
-            for(i = 0; i < s1; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], txtColor, bgColor, 2);
-            }
-            for(i = 0; i < s2; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], txtColor, bgColor, 2);
-            }
-            for(i = 0; i < s3; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], txtColor, bgColor, 2);
-            }
-            for(i = 0; i < s4; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], txtColor, bgColor, 2);
-            }
-        }
-        switch(pos)
-        {
-        case 0:
-            for(i = 0; i < s1; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], hlColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
-            {
-                WDInactiveCount = 0;
-                pos = 4;
-                resetFlag2 = 1;
-
-                ccw_prev = ccw;
-                cw_prev = cw;
-            }else if(ccw > ccw_prev)    //counter clockwise
-            {
-                WDInactiveCount = 0;
-                pos++;
-                ccw_prev = ccw;
-                cw_prev = cw;
-            }
-            for(i = 0; i < s1; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], txtColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            break;
-        case 1:
-            for(i = 0; i < s2; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], hlColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
-            {
-                WDInactiveCount = 0;
-                pos--;
-                ccw_prev = ccw;
-                cw_prev = cw;
-            }else if(ccw > ccw_prev)    //counter clockwise
-            {
-                WDInactiveCount = 0;
-                pos++;
-                ccw_prev = ccw;
-                cw_prev = cw;
-            }
-            for(i = 0; i < s2; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], txtColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            break;
-        case 2:
-            for(i = 0; i < s3; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], hlColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
-            {
-                WDInactiveCount = 0;
-                pos--;
-                ccw_prev = ccw;
-                cw_prev = cw;
-
-            }else if(ccw > ccw_prev)    //counter clockwise
-            {
-                WDInactiveCount = 0;
-                pos++;
-                ccw_prev = ccw;
-                cw_prev = cw;
-            }
-            for(i = 0; i < s3; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], txtColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            break;
-        case 3:
-            for(i = 0; i < s4; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], hlColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
-            {
-                WDInactiveCount = 0;
-                pos--;
-                ccw_prev = ccw;
-                cw_prev = cw;
-            }else if(ccw > ccw_prev)    //counter clockwise
-            {
-                WDInactiveCount = 0;
-                pos++;
-                resetFlag2 = 1;
-                ccw_prev = ccw;
-                cw_prev = cw;
-            }
-            for(i = 0; i < s4; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], txtColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            break;
-        case 4:
-            if(resetFlag2)
-            {
-                //                Output_Clear();
-                ST7735_FillScreen(bgColor);
-                resetFlag2 = 0;
-                for(i = 0; i < s; i++)
-                {
-                    ST7735_DrawChar(i*STEP + 20, HEIGHT*(1.0/6) + 10, c[i], txtColor, bgColor, 2);
-                }
-            }
-            for(i = 0; i < s5; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], hlColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
-            {
-                WDInactiveCount = 0;
-                pos--;
-                resetFlag = 1;
-                ccw_prev = ccw;
-                cw_prev = cw;
-            }else if(ccw > ccw_prev)    //counter clockwise
-            {
-                WDInactiveCount = 0;
-                pos = 0;
-                resetFlag = 1;
-                ccw_prev = ccw;
-                cw_prev = cw;
-            }
-            for(i = 0; i < s5; i++)
-            {
-                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], txtColor, bgColor, 2);
-            }
-            Delay1ms(250);
-            break;
-        default:
-            pos = 0;
-            break;
-        }
-    }
-    REFLAG = 0;
-    WDInactiveCount = 0;
-    if(InactiveFlag)
-    {
-        return;
-    }
-
-
-    if(pos == 4 && returnFlag)
-    {
-        InactiveFlag = 0;
-        InactiveCountStart = 0;
-        WDInactiveCount = 0;
-        return;
-    }
+    //    InactiveCountStart = 1;
+    //    int s = 6;                      //Size of string "Alarms"
+    //    int s1 = 7;                     //Size of string "Alarms 1"
+    //    int s2 = 7;                     //Size of string "Alarms 2"
+    //    int s3 = 7;                     //Size of string "Alarms 3"
+    //    int s4 = 7;                     //Size of string "Alarms 4"
+    //    int s5 = 5;                     //Size of string "Alarms 5"
+    //    int pos = 0;                    //Position of which string is emphasized (blinking) and will be selected
+    //    int ccw_prev = ccw;             //Previous counter clockwise counter
+    //    int cw_prev = cw;               //Previous clockwise counter
+    //    char c[9] = "Alarms";           //String "Alarms 1"
+    //    char c1[9] = "Alarm 1";         //String "Alarms 2"
+    //    char c2[9] = "Alarm 2";         //String "Alarms 3"
+    //    char c3[12] = "Alarm 3";        //String "Alarms 4"
+    //    char c4[9] = "Alarm 4";         //String "Alarms 5"
+    //    char c5[5] = "Back";            //Size of string "Back"
+    //    int i;                          //Integer to loop through printing the strings on the LCD
+    //    int resetFlag = 1;              //Flag to reset the display to page one
+    //    int resetFlag2 = 1;             //Flag to reset the display to page two
+    //    int returnFlag = 0;             //Determines whether to return to the display screen
+    //
+    //    //Loops while the RE Button isn't pressed.
+    //    //Once it is, then the highlighted menu option will be selected
+    //    while(REFLAG == 0)
+    //    {
+    //        if(InactiveFlag)
+    //        {
+    //            return;
+    //        }
+    //        resetWDCount();
+    //        if(resetFlag)
+    //        {
+    //            //            Output_Clear();             //Clears the LCD screen
+    //            ST7735_FillScreen(bgColor); //Sets background color
+    //            resetFlag = 0;              //Flag to reset the display to page one
+    //            //Fills the screen with all the options for the first page of the settings menu
+    //            for(i = 0; i < s; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP + 20, HEIGHT*(1.0/6) + 10, c[i], txtColor, bgColor, 2);
+    //            }
+    //            for(i = 0; i < s1; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], txtColor, bgColor, 2);
+    //            }
+    //            for(i = 0; i < s2; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], txtColor, bgColor, 2);
+    //            }
+    //            for(i = 0; i < s3; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], txtColor, bgColor, 2);
+    //            }
+    //            for(i = 0; i < s4; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], txtColor, bgColor, 2);
+    //            }
+    //        }
+    //        switch(pos)
+    //        {
+    //        case 0:
+    //            for(i = 0; i < s1; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], hlColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos = 4;
+    //                resetFlag2 = 1;
+    //
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //            }else if(ccw > ccw_prev)    //counter clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos++;
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //            }
+    //            for(i = 0; i < s1; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c1[i], txtColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            break;
+    //        case 1:
+    //            for(i = 0; i < s2; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], hlColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos--;
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //            }else if(ccw > ccw_prev)    //counter clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos++;
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //            }
+    //            for(i = 0; i < s2; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c2[i], txtColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            break;
+    //        case 2:
+    //            for(i = 0; i < s3; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], hlColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos--;
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //
+    //            }else if(ccw > ccw_prev)    //counter clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos++;
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //            }
+    //            for(i = 0; i < s3; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c3[i], txtColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            break;
+    //        case 3:
+    //            for(i = 0; i < s4; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], hlColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos--;
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //            }else if(ccw > ccw_prev)    //counter clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos++;
+    //                resetFlag2 = 1;
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //            }
+    //            for(i = 0; i < s4; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c4[i], txtColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            break;
+    //        case 4:
+    //            if(resetFlag2)
+    //            {
+    //                //                Output_Clear();
+    //                ST7735_FillScreen(bgColor);
+    //                resetFlag2 = 0;
+    //                for(i = 0; i < s; i++)
+    //                {
+    //                    ST7735_DrawChar(i*STEP + 20, HEIGHT*(1.0/6) + 10, c[i], txtColor, bgColor, 2);
+    //                }
+    //            }
+    //            for(i = 0; i < s5; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], hlColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            if(cw > cw_prev && ((cw - cw_prev) >= (ccw-ccw_prev)))            //clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos--;
+    //                resetFlag = 1;
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //            }else if(ccw > ccw_prev)    //counter clockwise
+    //            {
+    //                WDInactiveCount = 0;
+    //                pos = 0;
+    //                resetFlag = 1;
+    //                ccw_prev = ccw;
+    //                cw_prev = cw;
+    //            }
+    //            for(i = 0; i < s5; i++)
+    //            {
+    //                ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c5[i], txtColor, bgColor, 2);
+    //            }
+    //            Delay1ms(250);
+    //            break;
+    //        default:
+    //            pos = 0;
+    //            break;
+    //        }
+    //    }
+    //    REFLAG = 0;
+    //    WDInactiveCount = 0;
+    //    if(InactiveFlag)
+    //    {
+    //        return;
+    //    }
+    //
+    //
+    //    if(pos == 4 && returnFlag)
+    //    {
+    //        InactiveFlag = 0;
+    //        InactiveCountStart = 0;
+    //        WDInactiveCount = 0;
+    //        return;
+    //    }
+    printTime();
+    delaySeconds(3);
 }
 
 int verifyDate(int month, int day)
@@ -2052,19 +2093,47 @@ void invalidInput()
 
 void resetdisplayScreen()
 {
+    //    int s1 = 5;                     //Size of speed string
+    //    int s2 = 7;                     //Size of time string
+    //    int s3 = 5;                     //Size of date string
+    //    int s4 = 8;                     //Size of weekday string
+    //    int s5 = 12;                    //Size of temperature string
+    //    char c1[5] = "Speed";           //Speed string
+    //    char c2[7] = "Time";            //Time string
+    //    char c3[5] = "Date";            //Date string
+    //    char c4[8] = "Weekday";         //Weekday string
+    //    char c5[12] = "Temperature";    //Temperature string
+
+
     int s1 = 5;                     //Size of speed string
     int s2 = 7;                     //Size of time string
-    int s3 = 5;                     //Size of date string
-    int s4 = 8;                     //Size of weekday string
+    int s3 = 10;                     //Size of date string
+    int s4 = 10;                     //Size of weekday string
     int s5 = 12;                    //Size of temperature string
+    int pos = 0;                    //Position of which string is emphasized (blinking)
+    int cw_prev = cw;               //Previous clockwise counter
+    int ccw_prev = ccw;             //Previous counter clockwise counter
     char c1[5] = "Speed";           //Speed string
     char c2[7] = "Time";            //Time string
-    char c3[5] = "Date";            //Date string
-    char c4[8] = "Weekday";         //Weekday string
+    char c3[10] = "Date";            //Date string
+    //char c4[10] = "Weekday";         //Weekday string
     char c5[12] = "Temperature";    //Temperature string
+    //Array of strings for the weekdays
+    char week[7][10] = {"Sunday   ", "Monday   ", "Tuesday  ", "Wednesday", "Thursday ", "Friday   ", "Saturday "};
+
+    I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 7, timeDateReadback);
+    if(timeDateReadback[2] & PMbit)
+    {
+        sprintf(c2,"%02x:%02xPM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+    }else
+    {
+        sprintf(c2,"%02x:%02xAM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+    }
+    sprintf(c3,"%02x/%02x/%02x",timeDateReadback[5],timeDateReadback[4],timeDateReadback[6]);
+
 
     //    Output_Clear();                 //Clears the output of the LCD screen
-    ST7735_FillScreen(bgColor);     //Sets background color
+    //    ST7735_FillScreen(bgColor);     //Sets background color
     int i;                          //Integer to loop through printing the strings on the LCD
 
     //Display the speed, date, time, weekday, and temperature on the screen
@@ -2082,7 +2151,7 @@ void resetdisplayScreen()
     }
     for(i = 0; i < s4; i++)
     {
-        ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, c4[i], txtColor, bgColor, 2);
+        ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, week[timeDateReadback[3]][i], txtColor, bgColor, 2);
     }
     for(i = 0; i < s5; i++)
     {
@@ -2092,56 +2161,76 @@ void resetdisplayScreen()
 
 void songOne()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     TXDataCount = 8;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
     TXDataCount = 0;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
 }
 
 void songTwo()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     TXDataCount = 8;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
     TXDataCount = 1;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
 }
 
 void songThree()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     TXDataCount = 8;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
     TXDataCount = 2;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
 }
 
 void songFour()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     TXDataCount = 8;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
     TXDataCount = 3;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
 }
 
 void songFive()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     TXDataCount = 8;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
     TXDataCount = 4;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
 }
 
 void songSix()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     TXDataCount = 8;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
     TXDataCount = 5;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
 }
 
 void stopSong()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     TXDataCount = 6;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
 }
 
 //Altered clock initialization code obtain from Dr.Krug
@@ -2235,6 +2324,7 @@ void saveTime(uint8_t newAlarm)
             alarm[i].minute = alarm[i + 1].minute;
             alarm[i].second = alarm[i + 1].second;
             alarm[i].alarm = alarm[i + 1].alarm;
+            alarm[i].AM = alarm[i + 1].AM;
         }
 
         // Retrieving the most recent time when '*' was pressed
@@ -2245,6 +2335,14 @@ void saveTime(uint8_t newAlarm)
         alarm[4].day = timeDateReadback[4];
         alarm[4].month = timeDateReadback[5];
         alarm[4].year = timeDateReadback[6];
+        if(timeDateReadback[2] & PMbit)
+        {
+            alarm[4].AM = 0;
+        }else
+        {
+            alarm[4].AM = 1;
+        }
+
         alarm[4].alarm = newAlarm;
         //alarm[4].alarm = timeDateReadback[7];
     }
@@ -2257,82 +2355,107 @@ void printTime(void)
     int i;
     char hour[2], minute[2], second[2];
     ST7735_SetCursor(1, 4);
+    ST7735_FillScreen(ST7735_BLACK);     //Sets background color
 
     read_from_flash();
-    printf(" Previous time(s) \n    * was pressed\n");
-    printf("-----------------------------\n");
+    printf(" Previous time(s) \n    alarms set off\n");
+    printf("-------------------------\n");
 
     for(i = 4; i >= 0; i--)
     {
-        if(alarm[i].hour != 255)
+        //        if(alarm[i].hour != 255)
+        //        {
+        //            if(alarm[i].minute < 10 && alarm[i].second > 9)
+        //            {
+        //                sprintf(hour, "%x", alarm[i].hour);
+        //                sprintf(minute, "%x", alarm[i].minute);
+        //                sprintf(second, "%x", alarm[i].second);
+        //                if(alarm[i].AM)
+        //                {
+        //                    printf(" %s:0%s:%s AM", hour, minute, second);
+        //                }else
+        //                {
+        //                    printf(" %s:0%s:%s PM", hour, minute, second);
+        //                }
+        //            }
+        //            else if(alarm[i].second < 10 && alarm[i].minute > 9)
+        //            {
+        //                sprintf(hour, "%x", alarm[i].hour);
+        //                sprintf(minute, "%x", alarm[i].minute);
+        //                sprintf(second, "%x", alarm[i].second);
+        //                if(alarm[i].AM)
+        //                {
+        //                    printf(" %s:%s:0%s AM", hour, minute, second);
+        //                }else
+        //                {
+        //                    printf(" %s:%s:0%s PM", hour, minute, second);
+        //                }
+        //            }
+        //            else if(alarm[i].second < 10 && alarm[i].minute < 10)
+        //            {
+        //                sprintf(hour, "%x", alarm[i].hour);
+        //                sprintf(minute, "%x", alarm[i].minute);
+        //                sprintf(second, "%x", alarm[i].second);
+        //                if(alarm[i].AM)
+        //                {
+        //                    printf(" %s:0%s:0%s AM", hour, minute, second);
+        //                }else
+        //                {
+        //                    printf(" %s:0%s:0%s PM", hour, minute, second);
+        //                }
+        //            }
+        //        }
+        //        else
+        //        {
+        //            sprintf(hour, "%x", alarm[i].hour);
+        //            sprintf(minute, "%x", alarm[i].minute);
+        //            sprintf(second, "%x", alarm[i].second);
+        //            if(alarm[i].AM)
+        //            {
+        //                printf(" %s:%s:%s AM", hour, minute, second);
+        //            }else
+        //            {
+        //                printf(" %s:%s:%s PM", hour, minute, second);
+        //            }
+        //        }
+        //        display_date(i);
+        sprintf(hour, "%02x", alarm[i].hour);
+        sprintf(minute, "%02x", alarm[i].minute);
+//        sprintf(second, "%02x", alarm[i].second);
+//        if(alarm[i].AM)
+//        {
+//            printf(" %2s:%s:%sAM", hour, minute, second);
+//        }else
+//        {
+//            printf(" %s:%s:%sPM", hour, minute, second);
+//        }
+        if(alarm[i].AM)
         {
-            if(alarm[i].minute < 10 && alarm[i].second > 9)
-            {
-                sprintf(hour, "%x", alarm[i].hour);
-                sprintf(minute, "%x", alarm[i].minute);
-                sprintf(second, "%x", alarm[i].second);
-                if(alarm[i].AM)
-                {
-                    printf(" %s:0%s:%s AM", hour, minute, second);
-                }else
-                {
-                    printf(" %s:0%s:%s PM", hour, minute, second);
-                }
-            }
-            else if(alarm[i].second < 10 && alarm[i].minute > 9)
-            {
-                sprintf(hour, "%x", alarm[i].hour);
-                sprintf(minute, "%x", alarm[i].minute);
-                sprintf(second, "%x", alarm[i].second);
-                if(alarm[i].AM)
-                {
-                    printf(" %s:%s:0%s AM", hour, minute, second);
-                }else
-                {
-                    printf(" %s:%s:0%s PM", hour, minute, second);
-                }
-            }
-            else if(alarm[i].second < 10 && alarm[i].minute < 10)
-            {
-                sprintf(hour, "%x", alarm[i].hour);
-                sprintf(minute, "%x", alarm[i].minute);
-                sprintf(second, "%x", alarm[i].second);
-                if(alarm[i].AM)
-                {
-                    printf(" %s:0%s:0%s AM", hour, minute, second);
-                }else
-                {
-                    printf(" %s:0%s:0%s PM", hour, minute, second);
-                }
-            }
-        }
-        else
+            printf(" %2s:%sAM", hour, minute);
+        }else
         {
-            sprintf(hour, "%x", alarm[i].hour);
-            sprintf(minute, "%x", alarm[i].minute);
-            sprintf(second, "%x", alarm[i].second);
-            if(alarm[i].AM)
-            {
-                printf(" %s:%s:%s AM", hour, minute, second);
-            }else
-            {
-                printf(" %s:%s:%s PM", hour, minute, second);
-            }
+            printf(" %s:%sPM", hour, minute);
         }
         display_date(i);
     }
+    while(REFLAG == 0)
+    {
+        resetWDCount();
+    }
+    REFLAG = 0;
 }
 
 
 void display_date(int i)
 {
-    char date[2], month[2], year[2];
+    char date[2], month[2], year[2], alarms[2];
 
     sprintf(date, "%x", alarm[i].day);
     sprintf(month, "%x", alarm[i].month);
     sprintf(year, "%x", alarm[i].year);
+    sprintf(alarms, "%x", alarm[i].alarm);
 
-    printf(" %s/%s/%s\n", month, date, year);
+    printf(" %s/%s/%s %s\n", month, date, year, alarms);
 }
 
 void clockInit48MHzXTL(void)
@@ -2397,7 +2520,7 @@ void read_from_flash()
     for(i = 0; i < 5; i++)
     {
 
-        alarm[i].hour = read_back_data[(16 * i) + 4];
+        alarm[i].hour = (read_back_data[(16 * i) + 4]) & ~(PMbit | ClockBit12Hour);
         alarm[i].minute = read_back_data[(16 * i) + 5];
         alarm[i].second = read_back_data[(16 * i)];
 
@@ -2635,25 +2758,26 @@ void T32_INT2_IRQHandler()
     //    }
     //
 
-        if(distance <= 15)
+    if(distance <= 15)
+    {
+        if(alarmTwoFlag == 5)
         {
-            if(alarmTwoFlag == 5)
-            {
-                alarmTwo();
-            }
-            alarmTwoFlag++;
-            if(alarmTwoFlag >= 6)
-            {
-                alarmTwoFlag = 10;
-            }
-        }else if(!(distance <= 15))
-        {
-            if(alarmTwoFlag == 6)
-            {
-                alarmTwoOff();
-            }
-            alarmTwoFlag--;
+            alarmTwo();
         }
+        alarmTwoFlag++;
+        if(alarmTwoFlag >= 6)
+        {
+            alarmTwoFlag = 10;
+        }
+    }else if(!(distance <= 15))
+    {
+        if(alarmTwoFlag == 6)
+        {
+            alarmTwoOff();
+
+        }
+        alarmTwoFlag--;
+    }
     TIMER32_2->LOAD = (48000000 / 10) - 1;                       //Load into interrupt count down 10 milliseconds
 }
 
@@ -2670,26 +2794,38 @@ int readUSS()
 //}
 void alarmOne()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     TXDataCount = 7;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
     songFive();
+    P3->OUT |= (BIT3);
+    saveTime(1);
 }
 
 void alarmTwo()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     TXDataCount = 7;
     EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
+    I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
     songSix();
+    P3->OUT |= (BIT2);
+    saveTime(2);
 }
 
 void alarmOneOff()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     stopSong();
+    P3->OUT &= ~(BIT3);
 }
 
 void alarmTwoOff()
 {
+    EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
     stopSong();
+    P3->OUT &= ~(BIT2);
 }
 
 void EUSCIB0_IRQHandler(void)
@@ -2717,7 +2853,150 @@ void PORT1_IRQHandler(void)
     if(status & S1)
     {
         TXDataCount++;
+        I2C1_burstWrite(SLAVE_ADDRESS_MSP, 0, TXDataCount + 1, TXData);
         EUSCI_B0->IE |= EUSCI_B_IE_TXIE0; // Enable EUSCI_A0 TX interrupt
     }
 }
+
+void initLED()
+{
+    //BIT2 Red
+    //BIT3 Orange
+    P3->SEL0 &= ~(BIT2 | BIT3);
+    P3->SEL1 &= ~(BIT2 | BIT3);
+    P3->DIR |= (BIT2 | BIT3);
+    P3->OUT &= ~(BIT2 | BIT3);
+}
+
+void updateTime()
+{
+    char temp[3];
+
+    sprintf(temp, "%d", time.second);
+    sscanf(temp, "%x", &timeDateToSet[0]);
+
+    sprintf(temp, "%d", time.minute);
+    sscanf(temp, "%x", &timeDateToSet[1]);
+
+    sprintf(temp, "%d", time.hour);
+    sscanf(temp, "%x", &timeDateToSet[2]);
+    if(time.AM)
+    {
+        timeDateToSet[2] |= ClockBit12Hour;
+    }else
+    {
+        timeDateToSet[2] |= (ClockBit12Hour | PMbit);
+    }
+
+
+    //    sscanf(temp, "%x", &timeDateToSet[2]);
+
+    sprintf(temp, "%d", time.weekday);
+    sscanf(temp, "%x", &timeDateToSet[3]);
+
+    sprintf(temp, "%d", time.day);
+    sscanf(temp, "%x", &timeDateToSet[4]);
+
+    sprintf(temp, "%d", time.month);
+    sscanf(temp, "%x", &timeDateToSet[5]);
+
+    sprintf(temp, "%d", time.year);
+    sscanf(temp, "%x", &timeDateToSet[6]);
+
+    //    timeDateToSet[0] = (time.second % 10) + ((time.second / 10)*16);
+    //    timeDateToSet[1] = (time.minute % 10) + ((time.minute / 10)*16);
+    //    if(time.AM)
+    //    {
+    //        timeDateToSet[2] = (time.hour % 10) + ((time.hour / 10)*16) | ClockBit12Hour;
+    //    }else
+    //    {
+    //        timeDateToSet[2] = (time.hour % 10) + ((time.hour / 10)*16) | ClockBit12Hour | PMbit;
+    //    }
+    //    timeDateToSet[3] = (time.weekday % 10) + ((time.weekday / 10)*16);
+    //    timeDateToSet[4] = (time.day % 10) + ((time.day / 10)*16);
+    //    timeDateToSet[5] = (time.month % 10) + ((time.month / 10)*16);
+    //    timeDateToSet[6] = (time.year % 10) + ((time.year / 10)*16);
+    I2C1_burstWrite(SLAVE_ADDRESS_RTC, 0, 7, timeDateToSet);
+}
+
+void updateTimeStruct()
+{
+    I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 7, timeDateReadback);
+
+    char temp[3];
+    int temp2;
+
+    sprintf(temp, "%x", timeDateReadback[0]);
+    sscanf(temp, "%d", &temp2);
+    time.second = temp2;
+
+    sprintf(temp, "%x", timeDateReadback[1]);
+    sscanf(temp, "%d", &temp2);
+    time.minute = temp2;
+
+    sprintf(temp, "%x", (timeDateReadback[2] & ~(ClockBit12Hour | PMbit)));
+    sscanf(temp, "%d", &temp2);
+    time.hour = temp2;
+
+    sprintf(temp, "%x", timeDateReadback[3]);
+    sscanf(temp, "%d", &temp2);
+    time.weekday = temp2;
+
+    sprintf(temp, "%x", timeDateReadback[4]);
+    sscanf(temp, "%d", &temp2);
+    time.day = temp2;
+
+    sprintf(temp, "%x", timeDateReadback[5]);
+    sscanf(temp, "%d", &temp2);
+    time.month = temp2;
+
+    sprintf(temp, "%x", timeDateReadback[6]);
+    sscanf(temp, "%d", &temp2);
+    time.year = temp2;
+
+    //    sprintf(temp, "%d", time.minutetimeDateToSet[1]);
+    //    sscanf(temp, "%x", &);
+    //
+    //    sprintf(temp, "%d", time.hour);
+    //    sscanf(temp, "%x", &timeDateToSet[2]);
+    //    if(time.AM)
+    //    {
+    //        timeDateReadback[2] |= ClockBit12Hour;
+    //    }else
+    //    {
+    //        timeDateReadback[2] |= (ClockBit12Hour | PMbit);
+    //    }
+
+
+    //    sscanf(temp, "%x", &timeDateToSet[2]);
+
+    //    sprintf(temp, "%d", time.weekday);
+    //    sscanf(temp, "%x", &timeDateToSet[3]);
+    //
+    //    sprintf(temp, "%d", time.day);
+    //    sscanf(temp, "%x", &timeDateToSet[4]);
+    //
+    //    sprintf(temp, "%d", time.month);
+    //    sscanf(temp, "%x", &timeDateToSet[5]);
+    //
+    //    sprintf(temp, "%d", time.year);
+    //    sscanf(temp, "%x", &timeDateToSet[6]);
+    //
+    //    time.second = timeDateReadback[0];
+    //    time.minute = timeDateReadback[1];
+    //    time.hour = timeDateReadback[2] & ~(ClockBit12Hour | PMbit);
+    //    time.weekday = timeDateReadback[3];
+    //    time.day = timeDateReadback[4];
+    //    time.month = timeDateReadback[5];
+    //    time.year = timeDateReadback[6];
+    if(timeDateReadback[2] & PMbit)
+    {
+        time.AM = 0;
+    }else
+    {
+        time.AM = 1;
+    }
+    //    time.AM = ~(timeDateReadback[2] & PMbit);
+}
+
 
