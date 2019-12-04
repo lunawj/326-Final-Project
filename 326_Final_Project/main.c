@@ -60,6 +60,9 @@
 #include "Rotary_Encoder.h"
 #include "TeslaLogo.h"
 #include "TimerA.h"
+#include "Bipolar_Motor.h"
+#include "Speedometer.h"
+#include "Seven_Segment.h"
 
 //I2C
 // Definitions
@@ -67,12 +70,26 @@
 #define SLAVE_ADDRESS_MSP 0x48
 #define SLAVE_ADDRESS_RTC 0x68
 
+//Turn signal macros
+#define TurnLEDPort     P10
+#define TurnLEDLeft     BIT4
+#define TurnLEDRight    BIT5
+
+#define TWSPort         P8
+#define TWSLeft         BIT5
+#define TWSRight        BIT6
+#define LEDBLINK        5
+uint8_t ledBlinkCount = 0;
+
 // Global Variable
 char TXData[9] = "012345678";
 int TXDataCount = 0;
+int ADC = 0;
+int result = 0;
 
-int distance;
-
+//int temp3;    //Testing
+int temperature;
+//int high = 0;
 
 
 /*Boolean Macros*/
@@ -84,6 +101,25 @@ int distance;
 extern int cw;                      //Clockwise Counter
 extern int ccw;                     //Counter-Clockwise Counter
 extern volatile uint8_t REFLAG;     //RE Button Flag
+
+
+
+extern volatile int   Period;  // Holds the period between magnets
+extern volatile float RPM; // Revolutions-per-minute of motor
+extern volatile int   MPH; // Miles-per-hour
+extern uint8_t speedFLAG;
+extern int steps;
+
+int FLAG = 0;
+int high = 0;
+int motor_speed = 0;
+uint8_t MOTOR_SPINNING = 0;
+
+int speed = 0;
+int last_steps = 0;
+int difference = 0;
+int move = 0;
+
 
 //Macros for size of LCD
 #define HEIGHT 160
@@ -105,6 +141,9 @@ extern volatile uint8_t REFLAG;     //RE Button Flag
 /*Macro for '10' on keypad*/
 #define ASTERISK 10
 
+#define BTTN_PORT P5
+#define BUTTON BIT0
+
 //WD Function Prototype
 void WDInit();
 void resetWDCount();
@@ -119,10 +158,11 @@ void read_from_flash();
 void updateTime();
 void updateTimeStruct();
 
-extern unsigned char timeDateToSet[15];
-extern unsigned char timeDateReadback[7];
+extern unsigned char timeDateToSet[19];
+extern unsigned char timeDateReadback[19];
 
 int conv_to_inch = 3 * 148;
+uint8_t stopFlag = 0;
 extern volatile unsigned int currentedge;
 
 
@@ -162,6 +202,12 @@ void alarmTwo();                    //
 void alarmOneOff();                 //
 void alarmTwoOff();                 //
 void initLED();
+void TurnSignalInit();
+
+uint8_t button_pressed(void);
+void PORT5_IRQHandler(void);
+void enable_ButtonInterrupt(void);
+void button_initialization(void);
 
 void SetupTimer32s();
 
@@ -170,7 +216,18 @@ void initTimeOutTimer();            //60 second inactivity time out timers
 void USS_TRIG_Initialization();
 int readUSS();
 int readTemp();
+void ADC14_init();
+void convertAnalog(void);
+void screenBrightness();
 
+/* --- Prototype functions ---- */
+void EUSCI_Initialization(void);
+void CHIP_SELECT_Initialization(void);
+void set_SPI_Protocol(void);
+void send16BIT_Data(uint8_t address, uint8_t value);
+void clear_7Seg(void);
+void setup_7Seg(void);
+void displaySpeed();
 
 //Struct to time and dates
 typedef struct
@@ -207,7 +264,7 @@ uint8_t read_back_data[90]; // array to hold values read back from flash
 uint8_t* addr_pointer; // pointer to address in flash for reading back values
 
 int main(void)
-{
+ {
     // ---------- Code was copied from Lecture 7 by Dr. Krug ----------
     // ----------------------------------------------------------------
     // Allows button 1, on the MSP, to be used for input
@@ -219,7 +276,6 @@ int main(void)
     P1->IFG = 0x00;
 
     P1->SEL0 |= BIT6 | BIT7; // P1.6 and P1.7 as UCB0SDA and UCB0SCL respectively
-
     //    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_SWRST; // Hold EUSCI_B0 module in reset state
     //    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_MODE_3 | EUSCI_B_CTLW0_MST | EUSCI_B_CTLW0_SYNC;
     //    EUSCI_B0->CTLW0 |= EUSCI_B_CTLW0_UCSSEL_2; // Select SMCLK as EUSCI_B0 clock
@@ -248,8 +304,12 @@ int main(void)
 
 
 
-
-
+    button_initialization();
+    enable_ButtonInterrupt();
+    NVIC_EnableIRQ(PORT5_IRQn);
+    NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
+    TimerA_Initialization();
+    ADC14_init();
     initLED();
     WDCount = 0;
     WDInactiveCount = 0;
@@ -257,7 +317,7 @@ int main(void)
     InactiveCountStart = 0;
     uint16_t BLACK = ST7735_Color565(0,0,0);
     /* Stop Watchdog  */
-    MAP_WDT_A_holdTimer();
+//    MAP_WDT_A_holdTimer();
     I2C1_Initialization();          // Initializes I2C for Real Time Clock
     //    Keypad_Initialization();        //Initializes the Keypad
     //clockInit48MHzXTL();            // Setting MCLK to 48MHz for faster programming
@@ -266,14 +326,14 @@ int main(void)
 
     USS_TRIG_Initialization();
     NVIC_EnableIRQ(TA1_N_IRQn);
-
+    NVIC_EnableIRQ(TA0_N_IRQn);
     __enable_irq(); // All interrupts are enabled
 
     rotary_encoder_initialization();
     RE_setInterrupts();
     get_CLK_DT_values();
     // Enable Interrupts
-    NVIC_EnableIRQ(PORT5_IRQn);
+    NVIC_EnableIRQ(PORT6_IRQn);
     NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
     __enable_interrupt();
 
@@ -285,6 +345,17 @@ int main(void)
     //    ST7735_InitR(INITR_BLACKTAB);   // Initialize LCD
     //    Output_Clear();                 // Clear output
     //    ST7735_FillScreen(BLACK);       // Fills background color
+
+
+
+    BiMotor_Initialization();
+    CHIP_SELECT_Initialization();
+    EUSCI_Initialization();
+    set_SPI_Protocol();
+    setup_7Seg();
+    full_step(0, 30);
+    full_step(1, 50);
+
 
 
     ST7735_InitR(INITR_BLACKTAB);
@@ -303,6 +374,7 @@ int main(void)
     ST7735_DrawBitmap(0, 160, TeslaLogo, 128, 160);
     delaySeconds(3);
     REFLAG = 0;
+    TurnSignalInit();
     updateTimeStruct();
     displayScreen();
 
@@ -357,7 +429,9 @@ int main(void)
 //
 void displayScreen()
 {
-    int s1 = 5;                     //Size of speed string
+    char temp[3];
+    int temp2;
+    int s1 = 7;                     //Size of speed string
     int s2 = 10;                     //Size of time string
     int s3 = 10;                     //Size of date string
     int s4 = 10;                     //Size of weekday string
@@ -365,7 +439,7 @@ void displayScreen()
     int pos = 0;                    //Position of which string is emphasized (blinking)
     int cw_prev = cw;               //Previous clockwise counter
     int ccw_prev = ccw;             //Previous counter clockwise counter
-    char c1[5] = "Speed";           //Speed string
+    char c1[7] = "Speed";           //Speed string
     char c2[10] = "Time";            //Time string
     char c3[10] = "Date";            //Date string
     //char c4[10] = "Weekday";         //Weekday string
@@ -373,7 +447,7 @@ void displayScreen()
     //Array of strings for the weekdays
     char week[7][10] = {"Sunday   ", "Monday   ", "Tuesday  ", "Wednesday", "Thursday ", "Friday   ", "Saturday "};
 
-    I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 7, timeDateReadback);
+    I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 18, timeDateReadback);
     if(timeDateReadback[2] & PMbit)
     {
         sprintf(c2,"%02x:%02xPM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
@@ -382,13 +456,74 @@ void displayScreen()
         sprintf(c2,"%02x:%02xAM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
     }
     sprintf(c3,"%02x/%02x/%02x",timeDateReadback[5],timeDateReadback[4],timeDateReadback[6]);
+//    sprintf(c5,"%02x%cC      ",timeDateReadback[17], 248);
+    sprintf(temp, "%x", timeDateReadback[17]);
+    sscanf(temp, "%d", &temp2);
+    temp2 = temp2 * (9.0/5.0) + 32;
+    sprintf(c5,"%02d%cF      ",temp2, 248);
+    temperature = temp2;
+
+//    if(speedFLAG)
+//    {
+//        high++;
+//
+//        if(high > 60000)
+//        {
+//            MPH = 0; RPM = 0; high = 0;
+//
+//            if(FLAG) full_step(0, steps);
+//
+//            FLAG = 0;
+//        }
+//    }
+//    else if(!speedFLAG)
+//    {
+//        high = 0;
+//        speedFLAG = 1;
+//    }
+
+    sprintf(c1,"%02d MPH    ",MPH);
 
     InactiveCountStart = 1;
     //    Output_Clear();                 //Clears the output of the LCD screen
     ST7735_FillScreen(bgColor);     //Sets background color
     int i;                          //Integer to loop through printing the strings on the LCD
 
-    resetdisplayScreen();           //resets the screen display
+//    resetdisplayScreen();           //resets the screen display
+    I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 18, timeDateReadback);
+    if(timeDateReadback[2] & PMbit)
+            {
+                sprintf(c2,"%02x:%02xPM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+            }else
+            {
+                sprintf(c2,"%02x:%02xAM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+            }
+    //        sprintf(c3,"%02x/%02x/%02x",timeDateReadback[5],timeDateReadback[4],timeDateReadback[6]);
+    //        sprintf(c5,"%02x%cC      ",timeDateReadback[17], 248);
+    //        sprintf(temp, "%x", timeDateReadback[17]);
+    //        sscanf(temp, "%d", &temp2);
+    //        temp2 = temp2 * (9.0/5.0) + 32;
+    //        sprintf(c5,"%02d%cF      ",temp2, 248);
+            for(i = 0; i < s1; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(1.0/6) + 10, c1[i], txtColor, bgColor, 2);
+                }
+                for(i = 0; i < s2; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c2[i], txtColor, bgColor, 2);
+                }
+                for(i = 0; i < s3; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c3[i], txtColor, bgColor, 2);
+                }
+                for(i = 0; i < s4; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, week[timeDateReadback[3]][i], txtColor, bgColor, 2);
+                }
+                for(i = 0; i < s5; i++)
+                {
+                    ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c5[i], txtColor, bgColor, 2);
+                }
 
     while(1)
     {
@@ -401,8 +536,53 @@ void displayScreen()
             REFLAG = 0;
             settingsMenu();         //If the RE Button is pressed, go to the settings menu
             ST7735_FillScreen(bgColor);             //Sets background color
-            resetdisplayScreen();   //Resets the display screen after returning from the settings menu
+//            resetdisplayScreen();   //Resets the display screen after returning from the settings menu
         }
+
+
+
+        I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 18, timeDateReadback);
+        if(timeDateReadback[2] & PMbit)
+        {
+            sprintf(c2,"%02x:%02xPM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+        }else
+        {
+            sprintf(c2,"%02x:%02xAM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+        }
+        sprintf(c3,"%02x/%02x/%02x",timeDateReadback[5],timeDateReadback[4],timeDateReadback[6]);
+        //        sprintf(c5,"%02x%cC      ",timeDateReadback[17], 248);
+        sprintf(temp, "%x", timeDateReadback[17]);
+        sscanf(temp, "%d", &temp2);
+        temp2 = temp2 * (9.0/5.0) + 32;
+        sprintf(c5,"%02d%cF      ",temp2, 248);
+        temperature = temp2;
+        sprintf(c1,"%02d MPH    ",MPH);
+        for(i = 0; i < s1; i++)
+        {
+            ST7735_DrawChar(i*STEP, HEIGHT*(1.0/6) + 10, c1[i], txtColor, bgColor, 2);
+        }
+        for(i = 0; i < s2; i++)
+        {
+            ST7735_DrawChar(i*STEP, HEIGHT*(2.0/6) + 10, c2[i], txtColor, bgColor, 2);
+        }
+        for(i = 0; i < s3; i++)
+        {
+            ST7735_DrawChar(i*STEP, HEIGHT*(3.0/6) + 10, c3[i], txtColor, bgColor, 2);
+        }
+        for(i = 0; i < s4; i++)
+        {
+            ST7735_DrawChar(i*STEP, HEIGHT*(4.0/6) + 10, week[timeDateReadback[3]][i], txtColor, bgColor, 2);
+        }
+        for(i = 0; i < s5; i++)
+        {
+            ST7735_DrawChar(i*STEP, HEIGHT*(5.0/6) + 10, c5[i], txtColor, bgColor, 2);
+        }
+
+
+
+
+
+
 
         //Blinks the highlighted text
         //Increments position counter clockwise turns
@@ -530,17 +710,22 @@ void displayScreen()
             pos = 0;
             break;
         }
-        I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 7, timeDateReadback);
+//        I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 7, timeDateReadback);
         //        if(timeDateReadback[2])
-        if(timeDateReadback[2] & PMbit)
-        {
-            sprintf(c2,"%02x:%02xPM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
-        }else
-        {
-            sprintf(c2,"%02x:%02xAM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
-        }
-        sprintf(c3,"%02x/%02x/%02x",timeDateReadback[5],timeDateReadback[4],timeDateReadback[6]);
-        resetdisplayScreen();           //resets the screen display
+//        if(timeDateReadback[2] & PMbit)
+//        {
+//            sprintf(c2,"%02x:%02xPM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+//        }else
+//        {
+//            sprintf(c2,"%02x:%02xAM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
+//        }
+//        sprintf(c3,"%02x/%02x/%02x",timeDateReadback[5],timeDateReadback[4],timeDateReadback[6]);
+//        sprintf(c5,"%02x%cC      ",timeDateReadback[17], 248);
+//        sprintf(temp, "%x", timeDateReadback[17]);
+//        sscanf(temp, "%d", &temp2);
+//        temp2 = temp2 * (9.0/5.0) + 32;
+//        sprintf(c5,"%02d%cF      ",temp2, 248);
+   //        resetdisplayScreen();           //resets the screen display
 
     }
 }
@@ -1099,7 +1284,7 @@ void setDateMenu()                          //MUST READ DATE FROM RTC FIRST!!! F
     //Array of strings for the weekdays
     char week[7][10] = {"Sunday   ", "Monday   ", "Tuesday  ", "Wednesday", "Thursday ", "Friday   ", "Saturday "};
     char c[9] = "Set Date";                 //"Set Date" string
-    int weekday = 0;                        //Integer for the weekday
+    int weekday = time.weekday;                        //Integer for the weekday
 
     //    Output_Clear();                         //Clears the LCD screen
     ST7735_FillScreen(bgColor);             //Sets background color
@@ -2104,7 +2289,8 @@ void resetdisplayScreen()
     //    char c4[8] = "Weekday";         //Weekday string
     //    char c5[12] = "Temperature";    //Temperature string
 
-
+    char temp[3];
+    int temp2;
     int s1 = 5;                     //Size of speed string
     int s2 = 7;                     //Size of time string
     int s3 = 10;                     //Size of date string
@@ -2121,7 +2307,7 @@ void resetdisplayScreen()
     //Array of strings for the weekdays
     char week[7][10] = {"Sunday   ", "Monday   ", "Tuesday  ", "Wednesday", "Thursday ", "Friday   ", "Saturday "};
 
-    I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 7, timeDateReadback);
+    I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 18, timeDateReadback);
     if(timeDateReadback[2] & PMbit)
     {
         sprintf(c2,"%02x:%02xPM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
@@ -2130,10 +2316,12 @@ void resetdisplayScreen()
         sprintf(c2,"%02x:%02xAM",timeDateReadback[2] & ~(ClockBit12Hour | PMbit),timeDateReadback[1]);
     }
     sprintf(c3,"%02x/%02x/%02x",timeDateReadback[5],timeDateReadback[4],timeDateReadback[6]);
+    sprintf(temp, "%x", timeDateReadback[17]);
+    sprintf(c5,"%02x%cC      ",timeDateReadback[17], 248);
+    sscanf(temp, "%d", &temp2);
+    temp2 = temp2 * (9.0/5.0) + 32;
+    sprintf(c5,"%02d%cF      ",temp2, 248);
 
-
-    //    Output_Clear();                 //Clears the output of the LCD screen
-    //    ST7735_FillScreen(bgColor);     //Sets background color
     int i;                          //Integer to loop through printing the strings on the LCD
 
     //Display the speed, date, time, weekday, and temperature on the screen
@@ -2543,7 +2731,7 @@ void read_from_flash()
 //
 //
 //#define WDResetCount 3
-
+//
 //uint8_t button_pressed(void);
 //void PORT5_IRQHandler(void);
 //void enable_ButtonInterrupt(void);
@@ -2567,6 +2755,8 @@ void read_from_flash()
 //
 //    button_initialization();
 //    enable_ButtonInterrupt();
+//    NVIC_EnableIRQ(PORT5_IRQn);
+//    NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
 //    initSysTick();
 //    init48MHz();
 //
@@ -2576,8 +2766,7 @@ void read_from_flash()
 //    //Output_Clear();                     // Clears output
 //    ST7735_FillScreen(BLACK);           // Fills background color
 //    WDInit();
-//    NVIC_EnableIRQ(PORT5_IRQn);
-//    NVIC->ISER[0] = 1 <<((WDT_A_IRQn) & 31);
+
 //    __enable_interrupt(); // Enables the use of interrupts
 //
 //    P2->SEL0 &=~ BIT0;
@@ -2631,31 +2820,31 @@ void read_from_flash()
 
 
 
-//void button_initialization(void)
-//{
-//    // Sets Port 5 as a GPIO
-//    BTTN_PORT->SEL0 &= ~BUTTON;
-//    BTTN_PORT->SEL1 &= ~BUTTON;
-//
-//    // Sets BUTTON as inputs
-//    BTTN_PORT->DIR &= ~BUTTON;
-//
-//    // Enable resistor
-//    BTTN_PORT->REN |= BUTTON;
-//    // Set resistor as a pull-up
-//    BTTN_PORT->OUT |= BUTTON;
-//}
+void button_initialization(void)
+{
+    // Sets Port 5 as a GPIO
+    BTTN_PORT->SEL0 &= ~BUTTON;
+    BTTN_PORT->SEL1 &= ~BUTTON;
 
-//void enable_ButtonInterrupt(void)
-//{
-//    BTTN_PORT->IES |= BUTTON;
-//    BTTN_PORT->IE  |= BUTTON;
-//    BTTN_PORT->IFG = 0; // Clears falgs
-//}
+    // Sets BUTTON as inputs
+    BTTN_PORT->DIR &= ~BUTTON;
 
-//void PORT5_IRQHandler(void)
-//{
-//    if(BTTN_PORT->IFG & BUTTON)
+    // Enable resistor
+    BTTN_PORT->REN |= BUTTON;
+    // Set resistor as a pull-up
+    BTTN_PORT->OUT |= BUTTON;
+}
+
+void enable_ButtonInterrupt(void)
+{
+    BTTN_PORT->IES |= BUTTON;
+    BTTN_PORT->IE  |= BUTTON;
+    BTTN_PORT->IFG = 0; // Clears falgs
+}
+
+void PORT5_IRQHandler(void)
+{
+    if(BTTN_PORT->IFG & BUTTON)
 //        if(button_pressed())
 //        {
 //            WDCount = 0;
@@ -2665,23 +2854,25 @@ void read_from_flash()
 //                    |1<<3 // Clear Timer
 //                    |4; //Set to 2^15 interval (1 seconds)
 //        }
-//
-//    BTTN_PORT->IFG = 0; // Clears flags
-//}
+        if(button_pressed())
+            stopFlag = 1;
 
-//uint8_t button_pressed(void)
-//{
-//    // Checks for button press
-//    if(!(BTTN_PORT->IN & BUTTON))
-//    {
-//        Delay1ms(40); // Waits 40ms before checking button for press
-//
-//        // Checks to see if the button is still pressed
-//        if(!(BTTN_PORT->IN & BUTTON))
-//            return TRUE;
-//    }
-//    return FALSE;
-//}
+    BTTN_PORT->IFG = 0; // Clears flags
+}
+
+uint8_t button_pressed(void)
+{
+    // Checks for button press
+    if(!(BTTN_PORT->IN & BUTTON))
+    {
+        Delay1ms(40); // Waits 40ms before checking button for press
+
+        // Checks to see if the button is still pressed
+        if(!(BTTN_PORT->IN & BUTTON))
+            return TRUE;
+    }
+    return FALSE;
+}
 
 void WDInit()
 {
@@ -2695,6 +2886,10 @@ void WDInit()
 void WDT_A_IRQHandler(void)
 {
     WDCount++;
+    if(stopFlag)
+    {
+        WDCount = WDResetCount;
+    }
     if(InactiveCountStart)
     {
         WDInactiveCount++;
@@ -2712,12 +2907,26 @@ void WDT_A_IRQHandler(void)
         WDInactiveCount = 0;
         InactiveFlag = 1;
     }
+    screenBrightness();
+//    displaySpeed();
+//    if(!(TWSPort->IN & TWSLeft))
+//    {
+//        TurnLEDPort->OUT ^= TurnLEDRight;
+//        TurnLEDPort->OUT &= ~TurnLEDLeft;
+//    }else if(!(TWSPort->IN & TWSRight))
+//    {
+//        TurnLEDPort->OUT &= ~TurnLEDRight;
+//        TurnLEDPort->OUT ^= TurnLEDLeft;
+//    }else
+//    {
+//        TurnLEDPort->OUT &= ~(TurnLEDRight | TurnLEDLeft);
+//    }
 }
 
 
 void resetWDCount()
 {
-    WDInit();
+    //WDInit();
     WDCount = 0;
 }
 
@@ -2741,22 +2950,99 @@ void SetupTimer32s()
 void T32_INT2_IRQHandler()
 {
     TIMER32_2->INTCLR = 1;                                      //Clear interrupt flag so it does not interrupt again immediately.
-    distance = readUSS();
+    int distance = readUSS();
+//    displaySpeed();
+    ledBlinkCount++;
+    if(ledBlinkCount == LEDBLINK)
+    {
+        displaySpeed();
+        if(!(TWSPort->IN & TWSLeft))
+               {
+                   TurnLEDPort->OUT ^= TurnLEDRight;
+                   TurnLEDPort->OUT &= ~TurnLEDLeft;
+               }else if(!(TWSPort->IN & TWSRight))
+               {
+                   TurnLEDPort->OUT &= ~TurnLEDRight;
+                   TurnLEDPort->OUT ^= TurnLEDLeft;
+               }else
+               {
+                   TurnLEDPort->OUT &= ~(TurnLEDRight | TurnLEDLeft);
+               }
+        ledBlinkCount = 0;
+    }
 
-    //    if(readTemp() >= 120 && alarmOneFlag == 0)
-    //    {
-    //        alarmOne();
-    //        alarmOneFlag = 1;
-    //    }else if(!(readTemp() >= 120))
-    //    {
-    //        alarmOneFlag++;
-    //        if(alarmTwoFlag >= 0)
-    //        {
-    //            alarmOneFlag = 0;
-    //            alarmOneOff();
-    //        }
-    //    }
-    //
+//    int temp = readTemp();
+//Testing
+//    temp = 100;
+//
+//    if(temp3 == 5)
+//        temp3 = 100;
+//    else if (temp3 == 120)
+//        temp3 = 70;
+//    temp3++;
+//
+//    if(temp3 >= 100)
+//        {
+//            if(alarmOneFlag == 5)
+//                  {
+//                      alarmOne();
+//                  }
+//                  alarmOneFlag++;
+//                  if(alarmOneFlag >= 6)
+//                  {
+//                      alarmOneFlag = 10;
+//                  }
+//        }else if(!(temp3 >= 100))
+//        {
+//            if(alarmOneFlag == 6)
+//            {
+//                alarmOneOff();
+//            }
+//            alarmOneFlag--;
+//        }
+
+//    if(temp >= 100)
+//    {
+//        if(alarmOneFlag == 5)
+//              {
+//                  alarmOne();
+//              }
+//              alarmOneFlag++;
+//              if(alarmOneFlag >= 6)
+//              {
+//                  alarmOneFlag = 10;
+//              }
+//    }else if(!(temp >= 100))
+//    {
+//        if(alarmOneFlag == 6)
+//        {
+//            alarmOneOff();
+//        }
+//        alarmOneFlag--;
+//    }
+
+//    screenBrightness();
+
+    if(temperature >= 100)
+    {
+        if(alarmOneFlag == 5)
+              {
+                  alarmOne();
+              }
+              alarmOneFlag++;
+              if(alarmOneFlag >= 6)
+              {
+                  alarmOneFlag = 10;
+              }
+    }else if(!(temperature >= 100))
+    {
+        if(alarmOneFlag == 6)
+        {
+            alarmOneOff();
+        }
+        alarmOneFlag--;
+    }
+
 
     if(distance <= 15)
     {
@@ -2774,7 +3060,6 @@ void T32_INT2_IRQHandler()
         if(alarmTwoFlag == 6)
         {
             alarmTwoOff();
-
         }
         alarmTwoFlag--;
     }
@@ -2788,10 +3073,16 @@ int readUSS()
     return ((currentedge / conv_to_inch) - 3);
 }
 
-//int readTemp()
-//{
-//    return ((int));
-//}
+int readTemp()
+{
+    char temp[3];
+    int temp2;
+    I2C1_burstRead(SLAVE_ADDRESS_RTC, 0, 7, timeDateReadback);
+    sprintf(temp, "%x", timeDateReadback[17]);
+    sscanf(temp, "%d", &temp2);
+    temp2 = temp2 * (9.0/5.0) + 32;
+    return temp2;
+}
 void alarmOne()
 {
     EUSCI_B0->I2CSA = SLAVE_ADDRESS_MSP;
@@ -2999,4 +3290,162 @@ void updateTimeStruct()
     //    time.AM = ~(timeDateReadback[2] & PMbit);
 }
 
+void ADC14_init(void)
+{
+    // Initializes center pin of potentiometer to be used with ADC
+    P5->SEL0 |= BIT5;
+    P5->SEL1 |= BIT5;
 
+    ADC14->CTL0    &= ~ADC14_CTL0_ENC;    //turns off ADC converter while initializing
+    ADC14->CTL0    |=  0x04400110;         //16 sample clocks, SMCLK, S/H pulse
+    ADC14->CTL1     =  0x00000030;         //14 bit resolution
+    ADC14->CTL1    |=  0x00000000;         //convert for mem0 register
+    ADC14->MCTL[0]  =  0x00000000;         //mem[0] to ADC14INCHx = 0
+    ADC14->CTL0    |= ADC14_CTL0_ENC;     //enables ADC14ENC and starts ADC after configuration
+}
+
+void convertAnalog(void)
+{
+
+    ADC14->CTL0 |= ADC14_CTL0_SC;;
+    while(!ADC14->IFGR0 & BIT0); // Waits for interrupt of ADC
+    result = ADC14->MEM[0]; // Saves the decimal value of the voltage reading
+
+    ADC = (result * 360) / 16384;
+}
+
+void screenBrightness()
+{
+    convertAnalog();
+//    if(ADC <= 359 && ADC >= 330)
+//        TIMER_A3->CCR[2]  = 6000;
+//    else if(ADC < 330 && ADC > 300)
+//        TIMER_A3->CCR[2]  = 9000;
+//    else if(ADC < 300 && ADC > 270)
+//        TIMER_A3->CCR[2]  = 12000;
+//    else if(ADC < 270 && ADC > 240)
+//        TIMER_A3->CCR[2]  = 15000;
+//    else if(ADC < 240 && ADC > 210)
+//        TIMER_A3->CCR[2]  = 18000;
+//    else if(ADC < 210 && ADC > 180)
+//        TIMER_A3->CCR[2]  = 21000;
+//    else if(ADC < 150 && ADC > 120)
+//        TIMER_A3->CCR[2]  = 24000;
+//    else if(ADC < 120 && ADC > 90)
+//        TIMER_A3->CCR[2]  = 30000;
+//    else if(ADC < 90 && ADC > 60)
+//        TIMER_A3->CCR[2]  = 36000;
+//    else if(ADC < 60 && ADC > 30)
+//        TIMER_A3->CCR[2]  = 44000;
+
+
+    if(ADC <= 359 && ADC >= 330)
+        TIMER_A3->CCR[2]  = 44000;
+    else if(ADC < 330 && ADC > 300)
+        TIMER_A3->CCR[2]  = 36000;
+    else if(ADC < 300 && ADC > 270)
+        TIMER_A3->CCR[2]  = 30000;
+    else if(ADC < 270 && ADC > 240)
+        TIMER_A3->CCR[2]  = 24000;
+    else if(ADC < 240 && ADC > 210)
+        TIMER_A3->CCR[2]  = 21000;
+    else if(ADC < 210 && ADC > 180)
+        TIMER_A3->CCR[2]  = 18000;
+    else if(ADC < 150 && ADC > 120)
+        TIMER_A3->CCR[2]  = 15000;
+    else if(ADC < 120 && ADC > 90)
+        TIMER_A3->CCR[2]  = 12000;
+    else if(ADC < 90 && ADC > 60)
+        TIMER_A3->CCR[2]  = 9000;
+    else if(ADC < 60 && ADC > 30)
+        TIMER_A3->CCR[2]  = 6000;
+}
+
+void TurnSignalInit()
+{
+    TurnLEDPort->SEL0 &= ~(TurnLEDRight | TurnLEDLeft);
+    TurnLEDPort->SEL1 &= ~(TurnLEDRight | TurnLEDLeft);
+    TurnLEDPort->DIR |= (TurnLEDRight | TurnLEDLeft);
+    TurnLEDPort->OUT &= ~(TurnLEDRight | TurnLEDLeft);
+
+    TWSPort->SEL0 &= ~(TWSRight | TWSLeft);
+    TWSPort->SEL0 &= ~(TWSRight | TWSLeft);
+    TWSPort->DIR &= ~(TWSRight | TWSLeft);
+    TWSPort->REN |= (TWSRight | TWSLeft);
+    TWSPort->OUT |= (TWSRight | TWSLeft);
+}
+
+
+void displaySpeed()
+{
+    uint16_t temp = 0;
+        uint8_t temp1 = 0;
+        uint8_t temp2 = 0;
+        uint8_t temp3 = 0;
+        uint8_t temp4 = 0;
+
+        set_steps(MPH);
+
+                difference = steps - last_steps;
+
+                if(difference > 0)
+                {
+                    temp = MPH;
+                    temp4 = temp / 1000;
+                    temp = temp % 1000;
+                    temp3 = temp / 100;
+                    temp = temp % 100;
+                    temp2 = temp / 10;
+                    temp = temp % 10;
+                    temp1 = temp;
+
+                    send16BIT_Data(0x01, temp1);
+                    send16BIT_Data(0x02, temp2);
+                    send16BIT_Data(0x03, temp3);
+                    send16BIT_Data(0x04, temp4);
+
+                    move = difference;
+                    full_step(0, move);
+                }
+                else if(difference < 0)
+                {
+
+                    temp = MPH;
+                    temp4 = temp / 1000;
+                    temp = temp % 1000;
+                    temp3 = temp / 100;
+                    temp = temp % 100;
+                    temp2 = temp / 10;
+                    temp = temp % 10;
+                    temp1 = temp;
+
+                    send16BIT_Data(0x01, temp1);
+                    send16BIT_Data(0x02, temp2);
+                    send16BIT_Data(0x03, temp3);
+                    send16BIT_Data(0x04, temp4);
+
+                    move = abs(difference);
+                    full_step(1, move);
+                }
+
+                if(speedFLAG)
+                {
+                    high++;
+
+                    if(high > 2) // 60k
+                    {
+                        MPH = 0; RPM = 0; high = 0;
+
+                        if(FLAG) full_step(0, steps);
+
+                        FLAG = 0;
+                    }
+                }
+                else if(!speedFLAG)
+                {
+                    high = 0;
+                    speedFLAG = 1;
+                }
+
+                last_steps = steps;
+}

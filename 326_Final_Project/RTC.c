@@ -14,8 +14,11 @@
 /* Global Variables */
 
 /*                                         sec   min   hr    day   date  mon  yr          */
-extern unsigned char timeDateToSet[15] = {0x00, 0x59, 0x11 | 0b1000000, 0x02, 0x25, 0x10, 0x19, 0};
-extern unsigned char timeDateReadback[7] = {0, 0, 0, 0, 0, 0, 0};
+//extern unsigned char timeDateToSet[15] = {0x00, 0x59, 0x11 | 0b1000000, 0x02, 0x25, 0x10, 0x19, 0};
+//extern unsigned char timeDateReadback[7] = {0, 0, 0, 0, 0, 0, 0};
+extern unsigned char timeDateToSet[19] = {0x00, 0x59, 0x11 | 0b1000000, 0x02, 0x25, 0x10, 0x19, 0};//, 0, 0, 0, 0, 0, 0, 0, 0};
+extern unsigned char timeDateReadback[19] = {0, 0, 0, 0, 0, 0, 0};
+
 unsigned char tempReadback[2];
 
 /* Function: configure UCB0 as I2C

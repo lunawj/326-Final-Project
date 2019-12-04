@@ -57,6 +57,9 @@ main.obj: ../ST7735.h
 main.obj: ../Rotary_Encoder.h
 main.obj: ../TeslaLogo.h
 main.obj: ../TimerA.h
+main.obj: ../Bipolar_Motor.h
+main.obj: ../Speedometer.h
+main.obj: ../Seven_Segment.h
 
 ../main.c: 
 C:/ti/msp/MSP432Ware_3_50_00_02/driverlib/driverlib/MSP432P4xx/driverlib.h: 
@@ -115,3 +118,6 @@ C:/ti/ccsv8/tools/compiler/ti-cgt-arm_18.1.4.LTS/include/stdarg.h:
 ../Rotary_Encoder.h: 
 ../TeslaLogo.h: 
 ../TimerA.h: 
+../Bipolar_Motor.h: 
+../Speedometer.h: 
+../Seven_Segment.h: 

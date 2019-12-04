@@ -8,13 +8,15 @@
 #define TA0_PORT P2
 #define TA1_PORT P7
 #define TACLR BIT2
-
+//TA3.2
+#define LED P8
+#define LCD_LED BIT2
 
 /* --- Hall Effect Sensor macros --- */
 #define HE_PIN BIT4 // H.E. sensor pin (TA0.1)
 
 #define ACLK 32000     // Speed of ACLK
-#define DIAMETER 1.951 // Diameter of magnet holder (in inches)
+#define DIAMETER 144 // Diameter of magnet holder (in inches)
 #define FPH_MPH 5280   // Conversion from feet-per-hour to miles-per-hour
 #define pi 3.141592654
 
@@ -43,7 +45,8 @@ volatile float diameter_feet = 0; // Convert diameter from inches to feet
 volatile float circum = 0;  // Circumference of magnet holder
 volatile float feetPerMin = 0;
 volatile float feetPerHour = 0;
-volatile int   MPH = 0; // Miles-per-hour
+extern volatile int   MPH = 0; // Miles-per-hour
+extern uint8_t speedFLAG = 1;
 
 uint8_t STARTUP_FLAG = 1; // Used as a start-up flag
 
@@ -93,6 +96,21 @@ void TimerA_Initialization(void)
      *  3 -  0      - - -
      * ------------------------------- */
     TIMER_A0->CTL = 0x0120;
+
+
+    // Set
+        LED->SEL0 |=  (LCD_LED);
+        LED->SEL1 &= ~(LCD_LED);
+
+        LED->DIR |=  (LCD_LED);
+
+
+        // Sets period for timer(s)
+        TIMER_A3->CCR[0]  = 65536-1;
+        TIMER_A3->CCTL[2] = 0xE0;
+        TIMER_A3->CCR[2]  = 2000; // Duty cycle
+        TIMER_A3->CTL = 0x0214;
+
 }
 
 /* ----------------------------------------------------------
@@ -155,6 +173,7 @@ void TA0_N_IRQHandler(void)
     // When program detects a falling edge, it will reset TACLR
     if(!(TA0_PORT->IN & HE_PIN))
     {
+        speedFLAG = 0;
         if(Period == 0 && STARTUP_FLAG) // If it detects a falling edge at start-up
         {
             TIMER_A0->CTL |= 0x4; // Clear timer

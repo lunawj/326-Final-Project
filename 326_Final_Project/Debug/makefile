@@ -13,6 +13,8 @@ ORDERED_OBJS += \
 "./RTC.obj" \
 "./Rotary_Encoder.obj" \
 "./ST7735.obj" \
+"./Seven_Segment.obj" \
+"./Speedometer.obj" \
 "./TimerA.obj" \
 "./main.obj" \
 "./startup_msp432p401r_ccs.obj" \
@@ -163,8 +165,8 @@ all: $(OBJS) $(CMD_SRCS) $(LIB_SRCS) $(GEN_CMDS)
 # Other Targets
 clean:
 	-$(RM) $(BIN_OUTPUTS__QUOTED)$(EXE_OUTPUTS__QUOTED)
-	-$(RM) "RTC.obj" "Rotary_Encoder.obj" "ST7735.obj" "TimerA.obj" "main.obj" "startup_msp432p401r_ccs.obj" "system_msp432p401r.obj" 
-	-$(RM) "RTC.d" "Rotary_Encoder.d" "ST7735.d" "TimerA.d" "main.d" "startup_msp432p401r_ccs.d" "system_msp432p401r.d" 
+	-$(RM) "RTC.obj" "Rotary_Encoder.obj" "ST7735.obj" "Seven_Segment.obj" "Speedometer.obj" "TimerA.obj" "main.obj" "startup_msp432p401r_ccs.obj" "system_msp432p401r.obj" 
+	-$(RM) "RTC.d" "Rotary_Encoder.d" "ST7735.d" "Seven_Segment.d" "Speedometer.d" "TimerA.d" "main.d" "startup_msp432p401r_ccs.d" "system_msp432p401r.d" 
 	-@echo 'Finished clean'
 	-@echo ' '
 

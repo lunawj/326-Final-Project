@@ -15,6 +15,8 @@ C_SRCS += \
 ../RTC.c \
 ../Rotary_Encoder.c \
 ../ST7735.c \
+../Seven_Segment.c \
+../Speedometer.c \
 ../TimerA.c \
 ../main.c \
 ../startup_msp432p401r_ccs.c \
@@ -24,6 +26,8 @@ C_DEPS += \
 ./RTC.d \
 ./Rotary_Encoder.d \
 ./ST7735.d \
+./Seven_Segment.d \
+./Speedometer.d \
 ./TimerA.d \
 ./main.d \
 ./startup_msp432p401r_ccs.d \
@@ -33,6 +37,8 @@ OBJS += \
 ./RTC.obj \
 ./Rotary_Encoder.obj \
 ./ST7735.obj \
+./Seven_Segment.obj \
+./Speedometer.obj \
 ./TimerA.obj \
 ./main.obj \
 ./startup_msp432p401r_ccs.obj \
@@ -42,6 +48,8 @@ OBJS__QUOTED += \
 "RTC.obj" \
 "Rotary_Encoder.obj" \
 "ST7735.obj" \
+"Seven_Segment.obj" \
+"Speedometer.obj" \
 "TimerA.obj" \
 "main.obj" \
 "startup_msp432p401r_ccs.obj" \
@@ -51,6 +59,8 @@ C_DEPS__QUOTED += \
 "RTC.d" \
 "Rotary_Encoder.d" \
 "ST7735.d" \
+"Seven_Segment.d" \
+"Speedometer.d" \
 "TimerA.d" \
 "main.d" \
 "startup_msp432p401r_ccs.d" \
@@ -60,6 +70,8 @@ C_SRCS__QUOTED += \
 "../RTC.c" \
 "../Rotary_Encoder.c" \
 "../ST7735.c" \
+"../Seven_Segment.c" \
+"../Speedometer.c" \
 "../TimerA.c" \
 "../main.c" \
 "../startup_msp432p401r_ccs.c" \
